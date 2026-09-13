@@ -2,7 +2,7 @@ from datetime import datetime
 
 from sqlalchemy.dialects.postgresql import UUID
 
-from sqlalchemy import Column, ForeignKey, Index, String, Boolean, Text, Numeric, JSON, UniqueConstraint
+from sqlalchemy import Boolean, Column, ForeignKey, Index, JSON, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.models.utils import TimestampMixin, uuid_pk
@@ -45,6 +45,13 @@ class Preposto(TimestampMixin, Base):
 
     scope_links = relationship(
         "ScopePreposto",
+        back_populates="preposto",
+        lazy=True,
+        cascade="all, delete-orphan",
+    )
+
+    credenciado_links = relationship(
+        "PrepostoCredenciadoVinculo",
         back_populates="preposto",
         lazy=True,
         cascade="all, delete-orphan",
@@ -101,6 +108,21 @@ class PrepostoLocalidade(TimestampMixin, Base):
 
     preposto = relationship("Preposto", back_populates="localidades")
 
+    tarifas = relationship(
+        "PrepostoTarifa",
+        back_populates="localidade",
+        lazy=True,
+        cascade="all, delete-orphan",
+        order_by="desc(PrepostoTarifa.principal), PrepostoTarifa.condicao.asc()",
+    )
+
+    credenciado_links = relationship(
+        "PrepostoCredenciadoVinculo",
+        back_populates="localidade",
+        lazy=True,
+        cascade="all, delete-orphan",
+    )
+
     __table_args__ = (
         Index("ix_preposto_localidades_cidade_uf", "cidade", "uf"),
         Index(
@@ -108,6 +130,109 @@ class PrepostoLocalidade(TimestampMixin, Base):
             "cidade",
             "atende_importacao",
             "atende_exportacao",
+        ),
+    )
+
+
+class PrepostoTarifa(TimestampMixin, Base):
+    __tablename__ = "preposto_tarifas"
+
+    id = uuid_pk()
+    localidade_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("preposto_localidades.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    codigo = Column(String(64), nullable=False)
+    operacao = Column(String(20), nullable=False, index=True)
+    tipo = Column(String(64), nullable=False)
+    valor = Column(Numeric(12, 2), nullable=True)
+    valor_descricao = Column(String(255), nullable=True)
+    condicao = Column(String(500), nullable=True)
+    principal = Column(Boolean, nullable=False, default=False)
+    moeda = Column(String(8), nullable=False, default="BRL")
+    ativo = Column(Boolean, nullable=False, default=True)
+    observacoes = Column(Text, nullable=True)
+
+    localidade = relationship("PrepostoLocalidade", back_populates="tarifas")
+
+    __table_args__ = (
+        UniqueConstraint("localidade_id", "codigo", name="uq_preposto_tarifa_localidade_codigo"),
+        Index("ix_preposto_tarifas_operacao_ativo", "operacao", "ativo"),
+    )
+
+
+class PrepostoCredenciado(TimestampMixin, Base):
+    __tablename__ = "preposto_credenciados"
+
+    id = uuid_pk()
+    organization_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.id"),
+        nullable=False,
+        index=True,
+    )
+
+    nome = Column(String(255), nullable=False, index=True)
+    cpf = Column(String(11), nullable=False)
+    registro_rfb = Column(String(32), nullable=True)
+    categoria = Column(String(20), nullable=False, default="DESPACHANTE")
+    ativo = Column(Boolean, nullable=False, default=True)
+    observacoes = Column(Text, nullable=True)
+
+    vinculos = relationship(
+        "PrepostoCredenciadoVinculo",
+        back_populates="credenciado",
+        lazy=True,
+        cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "cpf",
+            name="uq_preposto_credenciado_organization_cpf",
+        ),
+    )
+
+
+class PrepostoCredenciadoVinculo(TimestampMixin, Base):
+    __tablename__ = "preposto_credenciado_vinculos"
+
+    id = uuid_pk()
+    credenciado_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("preposto_credenciados.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    preposto_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("prepostos.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    localidade_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("preposto_localidades.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    ativo = Column(Boolean, nullable=False, default=True)
+    observacoes = Column(Text, nullable=True)
+
+    credenciado = relationship("PrepostoCredenciado", back_populates="vinculos")
+    preposto = relationship("Preposto", back_populates="credenciado_links")
+    localidade = relationship("PrepostoLocalidade", back_populates="credenciado_links")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "credenciado_id",
+            "preposto_id",
+            "localidade_id",
+            name="uq_preposto_credenciado_vinculo",
         ),
     )
 

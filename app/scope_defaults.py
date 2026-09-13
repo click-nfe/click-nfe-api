@@ -2,12 +2,12 @@ from copy import deepcopy
 from copy import deepcopy
 
 _DEFAULT_BANK_ACCOUNT = {"banco": "", "agencia": "", "conta": ""}
-_DEFAULT_BENEFICIO = {"regime": "INTEGRAL", "detalheBeneficio": ""}
+_DEFAULT_BENEFICIO = {"regime": "", "detalheBeneficio": ""}
 
 _DEFAULT_AFRMM = {
     "contaPagamento": "CASCO",
     "dadosContaCliente": deepcopy(_DEFAULT_BANK_ACCOUNT),
-    "regime": "INTEGRAL",
+    "regime": "",
     "detalheBeneficio": "",
     "observacao": "",
 }
@@ -15,7 +15,7 @@ _DEFAULT_AFRMM = {
 _DEFAULT_ICMS = {
     "contaPagamento": "CASCO",
     "dadosContaCliente": deepcopy(_DEFAULT_BANK_ACCOUNT),
-    "regime": "INTEGRAL",
+    "regime": "",
     "recolhida": "",
     "efetiva": "",
     "observacao": "",

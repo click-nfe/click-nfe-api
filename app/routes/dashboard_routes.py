@@ -165,7 +165,7 @@ def admin_scopes_for_user(user_id):
 
     limit = _parse_int(
         request.args.get("limit"),
-        default=50,
+        default=500,
         min_value=1,
         max_value=500,
     )
@@ -239,7 +239,7 @@ def admin_clients_for_user(user_id):
 
     limit = _parse_int(
         request.args.get("limit"),
-        default=50,
+        default=500,
         min_value=1,
         max_value=500,
     )

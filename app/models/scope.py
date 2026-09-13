@@ -52,7 +52,7 @@ class Scope(TimestampMixin, Base):
     last_published_at = Column(DateTime, nullable=True)
 
     organization = relationship("Organization", back_populates="scopes")
-    client = relationship("Client", back_populates="scopes")
+    client = relationship("Client", back_populates="scope")
 
     created_by = relationship("User", foreign_keys=[created_by_id])
     responsible_user = relationship("User", foreign_keys=[responsible_user_id])
@@ -77,6 +77,10 @@ class Scope(TimestampMixin, Base):
         lazy=True,
         cascade="all, delete-orphan",
         order_by="desc(ScopeVersion.version_number)",
+    )
+
+    __table_args__ = (
+        UniqueConstraint("client_id", name="uq_scopes_client_id"),
     )
 
 

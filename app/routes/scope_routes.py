@@ -11,7 +11,7 @@ from ..auth import auth_required
 from ..extensions import db
 from ..models import Client, Scope, ScopeAssignment, ScopeVersion, User
 from ..schemas import ScopeBulkResponsibleSchema, ScopeListQuerySchema, ScopeSchema, UserSchema
-from ..services.scope_processor import ScopeDataProcessor
+from ..services.scope_processor import ClientScopeConflictError, ScopeDataProcessor
 
 scope_bp = Blueprint("scopes", __name__, url_prefix="/scopes")
 scope_schema = ScopeSchema()
@@ -21,6 +21,18 @@ bulk_responsible_schema = ScopeBulkResponsibleSchema()
 
 def _processor() -> ScopeDataProcessor:
     return ScopeDataProcessor(current_user=g.current_user)
+
+
+def _client_scope_conflict_response(exc: ClientScopeConflictError):
+    db.session.rollback()
+    return jsonify(
+        {
+            "error": "client_scope_already_exists",
+            "message": str(exc),
+            "client_id": exc.client_id,
+            "scope_id": exc.scope_id,
+        }
+    ), 409
 
 
 def _load_scope_payload() -> dict:
@@ -68,6 +80,7 @@ def get_scope_metadata():
 @auth_required
 def create_scope():
     template_id = request.args.get("templateId", None)
+    client_id = request.args.get("clientId", None)
     processor = _processor()
 
     if template_id:
@@ -76,18 +89,32 @@ def create_scope():
     else:
         draft = processor.normalize_draft(_load_scope_payload())
 
+    client = None
+    if client_id:
+        client = processor.get_client_for_current_user(client_id)
+        draft = processor.prefill_client_draft(client, draft)
+
     scope = Scope(
         organization_id=g.current_user.organization_id,
         created_by_id=g.current_user.id,
+        client_id=client.id if client else None,
         draft=draft,
         version=1,
     )
+    if client:
+        try:
+            processor.ensure_client_available(scope, client)
+        except ClientScopeConflictError as exc:
+            return _client_scope_conflict_response(exc)
     processor.apply_draft_to_scope(scope, draft)
 
     db.session.add(scope)
     db.session.flush()
 
-    processor.upsert_client_from_draft(scope, draft)
+    try:
+        processor.upsert_client_from_draft(scope, draft)
+    except ClientScopeConflictError as exc:
+        return _client_scope_conflict_response(exc)
     processor.sync_assignments_from_draft(scope, draft)
     processor.sync_services_from_draft(scope, draft)
     processor.sync_prepostos_from_draft(scope, draft)
@@ -298,19 +325,12 @@ def update_scope_template(template_id: int):
 @auth_required
 def get_scope(scope_id: str):
     processor = _processor()
-    scope_query = (
-        processor.scope_query_for_current_user()
-        .join(User, Scope.created_by_id == User.id)
-        .with_entities(Scope, User)
-        .filter(Scope.id == scope_id)
-        .first_or_404()
-    )
-    scope, user = scope_query
+    scope = processor.get_scope_for_current_user(scope_id)
 
     return jsonify(
         {
             **scope_schema.dump(scope),
-            "created_by": UserSchema(only=["id", "nome", "email", "role", "setor"]).dump(user),
+            "created_by": UserSchema(only=["id", "nome", "email", "role", "setor"]).dump(scope.created_by),
         }
     )
 
@@ -319,11 +339,14 @@ def get_scope(scope_id: str):
 @auth_required
 def update_scope(scope_id: str):
     processor = _processor()
-    scope = processor.scope_query_for_current_user().filter(Scope.id == scope_id).first_or_404()
+    scope = processor.get_scope_for_current_user(scope_id)
     normalized_draft = processor.normalize_draft(_load_scope_payload())
 
     processor.apply_draft_to_scope(scope, normalized_draft)
-    processor.upsert_client_from_draft(scope, normalized_draft)
+    try:
+        processor.upsert_client_from_draft(scope, normalized_draft)
+    except ClientScopeConflictError as exc:
+        return _client_scope_conflict_response(exc)
     processor.sync_assignments_from_draft(scope, normalized_draft)
     processor.sync_services_from_draft(scope, normalized_draft)
     processor.sync_prepostos_from_draft(scope, normalized_draft)
@@ -336,12 +359,15 @@ def update_scope(scope_id: str):
 @auth_required
 def publish_scope(scope_id: str):
     processor = _processor()
-    scope = processor.scope_query_for_current_user().filter(Scope.id == scope_id).first_or_404()
+    scope = processor.get_scope_for_current_user(scope_id)
     now = datetime.now()
 
     normalized_draft = processor.normalize_draft(scope.draft)
     processor.apply_draft_to_scope(scope, normalized_draft)
-    processor.upsert_client_from_draft(scope, normalized_draft)
+    try:
+        processor.upsert_client_from_draft(scope, normalized_draft)
+    except ClientScopeConflictError as exc:
+        return _client_scope_conflict_response(exc)
     processor.sync_assignments_from_draft(scope, normalized_draft)
     processor.sync_services_from_draft(scope, normalized_draft)
     processor.sync_prepostos_from_draft(scope, normalized_draft)
@@ -381,8 +407,11 @@ def sync_scope(scope_id: str):
     payload = request.get_json(silent=True) or {}
     dry_run = bool(payload.get("dryRun", True))
 
-    scope = processor.scope_query_for_current_user().filter(Scope.id == scope_id).first_or_404()
-    result = processor.sync_scope(scope, dry_run=dry_run)
+    scope = processor.get_scope_for_current_user(scope_id)
+    try:
+        result = processor.sync_scope(scope, dry_run=dry_run)
+    except ClientScopeConflictError as exc:
+        return _client_scope_conflict_response(exc)
 
     if not dry_run and result.changed:
         db.session.commit()
@@ -412,7 +441,10 @@ def sync_missing_scopes():
         query = query.filter(Scope.status == payload["status"])
 
     scopes = query.limit(limit).all()
-    results = processor.sync_scopes(scopes, dry_run=dry_run)
+    try:
+        results = processor.sync_scopes(scopes, dry_run=dry_run)
+    except ClientScopeConflictError as exc:
+        return _client_scope_conflict_response(exc)
 
     if not dry_run:
         db.session.commit()
@@ -432,7 +464,7 @@ def sync_missing_scopes():
 @auth_required
 def list_scope_versions(scope_id: str):
     processor = _processor()
-    scope = processor.scope_query_for_current_user().filter(Scope.id == scope_id).first_or_404()
+    scope = processor.get_scope_for_current_user(scope_id)
     rows = (
         ScopeVersion.query.filter_by(scope_id=scope.id)
         .order_by(ScopeVersion.version_number.desc())
@@ -455,7 +487,7 @@ def list_scope_versions(scope_id: str):
 @auth_required
 def delete_scope(scope_id: str):
     processor = _processor()
-    scope = processor.scope_query_for_current_user().filter(Scope.id == scope_id).first_or_404()
+    scope = processor.get_scope_for_current_user(scope_id)
     db.session.delete(scope)
     db.session.commit()
     return "", 204

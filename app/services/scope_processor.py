@@ -7,8 +7,10 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID
 
+from flask import abort
 from sqlalchemy import and_, distinct, func
 
+from app.cnpj import normalize_cnpj
 from app.models.scope import ScopeTemplate
 from app.cnae import normalize_cnae, normalize_cnae_list
 
@@ -25,6 +27,15 @@ from ..models import (
     User,
 )
 from ..scope_defaults import apply_admin_defaults, build_default_scope_draft, merge_scope_draft
+
+
+class ClientScopeConflictError(Exception):
+    """Indica que um cliente já está associado a outro escopo."""
+
+    def __init__(self, client: Client, scope: Scope):
+        self.client_id = str(client.id)
+        self.scope_id = str(scope.id)
+        super().__init__("Este cliente já possui um escopo.")
 
 
 @dataclass
@@ -155,6 +166,16 @@ class ScopeDataProcessor:
         if self.organization_id:
             query = query.filter(Scope.organization_id == self.organization_id)
         return query
+
+    def get_scope_for_current_user(self, scope_id: str) -> Scope:
+        try:
+            normalized_scope_id = UUID(str(scope_id))
+        except (TypeError, ValueError):
+            abort(404)
+
+        return self.scope_query_for_current_user().filter(
+            Scope.id == normalized_scope_id
+        ).first_or_404()
     
     def template_query_for_current_user(self):
         query = ScopeTemplate.query
@@ -191,9 +212,53 @@ class ScopeDataProcessor:
     # ---------------------------------------------------------------------
     # Client
     # ---------------------------------------------------------------------
+    def get_client_for_current_user(self, client_id: str) -> Client:
+        try:
+            normalized_client_id = UUID(str(client_id))
+        except (TypeError, ValueError):
+            abort(404)
+
+        query = Client.query.filter(Client.id == normalized_client_id)
+        if self.organization_id:
+            query = query.filter(Client.organization_id == self.organization_id)
+        return query.first_or_404()
+
+    def ensure_client_available(self, scope: Scope, client: Client) -> None:
+        if client.id is None:
+            return
+
+        query = Scope.query.filter(Scope.client_id == client.id)
+        if scope.organization_id:
+            query = query.filter(Scope.organization_id == scope.organization_id)
+        if scope.id:
+            query = query.filter(Scope.id != scope.id)
+
+        existing_scope = query.first()
+        if existing_scope:
+            raise ClientScopeConflictError(client, existing_scope)
+
+    def prefill_client_draft(self, client: Client, draft: dict) -> dict:
+        prepared_draft = deepcopy(draft)
+        sobre_empresa = prepared_draft.setdefault("sobreEmpresa", {})
+        sobre_empresa.update(
+            {
+                "cnpj": client.cnpj,
+                "razaoSocial": client.razao_social,
+                "nomeResumido": client.nome_resumido or "",
+                "inscricaoEstadual": client.inscricao_estadual or "",
+                "inscricaoMunicipal": client.inscricao_municipal or "",
+                "enderecoCompletoEscritorio": client.endereco_completo_escritorio or "",
+                "enderecoCompletoArmazem": client.endereco_completo_armazem or "",
+                "cnaePrincipal": client.cnae_principal or "",
+                "cnaeSecundario": client.cnae_secundario or "",
+                "regimeTributacao": client.regime_tributacao or "",
+            }
+        )
+        return prepared_draft
+
     def upsert_client_from_draft(self, scope: Scope, normalized_draft: dict) -> Client | None:
         sobre_empresa = normalized_draft.get("sobreEmpresa") or {}
-        cnpj = (sobre_empresa.get("cnpj") or "").strip()
+        cnpj = normalize_cnpj(sobre_empresa.get("cnpj"))
         razao_social = (sobre_empresa.get("razaoSocial") or "").strip()
 
         if not cnpj or not razao_social or not scope.organization_id:
@@ -211,6 +276,8 @@ class ScopeDataProcessor:
                 razao_social=razao_social,
             )
             db.session.add(client)
+
+        self.ensure_client_available(scope, client)
 
         client.razao_social = razao_social
         client.nome_resumido = sobre_empresa.get("nomeResumido")

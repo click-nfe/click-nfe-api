@@ -2,6 +2,7 @@ from flask import Blueprint, g, jsonify, request
 from marshmallow import ValidationError
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import selectinload
 
 from ..auth import auth_required
 from ..extensions import db
@@ -22,7 +23,7 @@ client_update_schema = ClientUpdateSchema()
 
 
 def _client_query_for_user():
-    q = Client.query
+    q = Client.query.options(selectinload(Client.scope))
     if g.current_user.organization_id:
         q = q.filter(Client.organization_id == g.current_user.organization_id)
     return q

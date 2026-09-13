@@ -25,11 +25,21 @@ class ClientContactSchema(SQLAlchemyAutoSchema):
 
 class ClientSchema(SQLAlchemyAutoSchema):
     contatos = fields.Nested(ClientContactSchema, many=True, dump_only=True)
+    scope_id = fields.Method("get_scope_id", dump_only=True)
+    has_scope = fields.Method("get_has_scope", dump_only=True)
 
     class Meta:
         model = Client
         load_instance = True
         include_fk = True
+
+    @staticmethod
+    def get_scope_id(client):
+        return str(client.scope.id) if client.scope else None
+
+    @staticmethod
+    def get_has_scope(client):
+        return client.scope is not None
 
 
 class ClientCreateSchema(Schema):
