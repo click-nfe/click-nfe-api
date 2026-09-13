@@ -12,6 +12,7 @@ from sqlalchemy import and_, distinct, func
 
 from app.cnpj import normalize_cnpj
 from app.models.scope import ScopeTemplate
+from app.cnae import normalize_cnae, normalize_cnae_list
 
 from ..extensions import db
 from ..models import (
@@ -151,10 +152,14 @@ class ScopeDataProcessor:
         return row.value_json if row and row.value_json else self.DEFAULT_SETTINGS.copy()
 
     def normalize_draft(self, draft: dict | None) -> dict:
-        return apply_admin_defaults(
+        normalized = apply_admin_defaults(
             merge_scope_draft(build_default_scope_draft(), draft or {}),
             self.get_admin_settings(),
         )
+        company = normalized.get("sobreEmpresa") or {}
+        company["cnaePrincipal"] = normalize_cnae(company.get("cnaePrincipal"))
+        company["cnaeSecundario"] = normalize_cnae_list(company.get("cnaeSecundario"))
+        return normalized
 
     def scope_query_for_current_user(self):
         query = Scope.query
