@@ -20,10 +20,16 @@ def create_app(config_object=Config):
         app,
         resources={
             r"/*": {
-                "origins": app.config["CORS_ORIGINS"],
+                "origins": app.config.get(
+                    "CORS_ORIGINS",
+                    ["http://localhost:3000"],
+                ),
             }
         },
-        supports_credentials=app.config["CORS_SUPPORTS_CREDENTIALS"],
+        supports_credentials=app.config.get(
+            "CORS_SUPPORTS_CREDENTIALS",
+            True,
+        ),
         allow_headers=["Content-Type", "Authorization"],
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     )
