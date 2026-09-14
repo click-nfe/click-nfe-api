@@ -1,14 +1,16 @@
-FROM python:3.11-slim
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
 WORKDIR /app
-EXPOSE 5801
+
 COPY requirements.txt .
-
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt \
-    && pip install --no-cache-dir --upgrade setuptools
-
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
+    && pip install --no-cache-dir -r requirements.txt
 
 COPY . .
-CMD ["gunicorn","--workers", "6", "--bind", "0.0.0.0:8080","--timeout", "600", "wsgi:app"]
+
+EXPOSE 8080
+
+CMD ["gunicorn", "--workers", "2", "--bind", "0.0.0.0:8080", "--timeout", "600", "wsgi:app"]
