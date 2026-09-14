@@ -6,10 +6,6 @@ __pycache__/
 # C extensions
 *.so
 
-# alembic dir
-alembic/
-alembic.ini
-
 # Distribution / packaging
 .Python
 build/
@@ -107,6 +103,8 @@ celerybeat.pid
 
 # Environments
 .env
+.env.*
+!.env.example
 .venv
 env/
 venv/

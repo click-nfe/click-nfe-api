@@ -3,21 +3,39 @@ from flask_cors import CORS
 from marshmallow import ValidationError
 
 from .config import Config
-from .extensions import db
+from .extensions import db, migrate
 
 
 def create_app(config_object=Config):
     app = Flask(__name__)
     app.config.from_object(config_object)
 
+    if not app.config.get("SECRET_KEY"):
+        raise RuntimeError(
+            "SECRET_KEY é obrigatória. Copie .env.example para .env "
+            "e defina uma chave segura."
+        )
+
     CORS(
         app,
-        resources={r"/*": {"origins": "https://www.portalcl.online"}},
+        resources={
+            r"/*": {
+                "origins": app.config.get(
+                    "CORS_ORIGINS",
+                    ["http://localhost:3000"],
+                ),
+            }
+        },
+        supports_credentials=app.config.get(
+            "CORS_SUPPORTS_CREDENTIALS",
+            True,
+        ),
         allow_headers=["Content-Type", "Authorization"],
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     )
 
     db.init_app(app)
+    migrate.init_app(app, db, compare_type=True)
 
     from .routes.auth_routes import auth_bp
     from .routes.dashboard_routes import dashboard_bp
@@ -71,6 +89,11 @@ def create_app(config_object=Config):
 
     @app.errorhandler(ValidationError)
     def handle_validation_error(err):
-        return jsonify({"error": "Validation error", "messages": err.messages}), 400
+        return jsonify(
+            {
+                "error": "Validation error",
+                "messages": err.messages,
+            }
+        ), 400
 
     return app
