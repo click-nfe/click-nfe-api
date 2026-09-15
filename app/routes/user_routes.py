@@ -4,29 +4,41 @@ from ..auth import admin_required, auth_required
 from ..extensions import db
 from ..models import User
 from ..schemas import UserSchema
+from .route_helpers import uuid_or_404
 
 user_bp = Blueprint("users", __name__, url_prefix="/users")
 user_schema = UserSchema()
 users_schema = UserSchema(many=True)
-ALLOWED_ROLES = {"administrador", "comercial", "credenciamento", "operacao"}
+ALLOWED_ROLES = {"admin", "comercial", "credenciamento", "operacao"}
+
+
+def _user_query_for_current_organization():
+    return User.query.filter(
+        User.organization_id == g.current_user.organization_id
+    )
 
 
 @user_bp.get("")
 @admin_required
 def list_users():
-    query = User.query.order_by(User.nome.asc()).filter(User.ativo == True)
-    if g.current_user.organization_id:
-        query = query.filter(User.organization_id == g.current_user.organization_id)
+    query = (
+        _user_query_for_current_organization()
+        .filter(User.ativo.is_(True))
+        .order_by(User.nome.asc())
+    )
     users = query.all()
 
     return jsonify(UserSchema(many=True).dump(users))
 
+
 @user_bp.get("/responsibles")
 @auth_required
 def list_responsibles():
-    query = User.query.filter_by(ativo=True).order_by(User.nome.asc())
-    if g.current_user.organization_id:
-        query = query.filter_by(organization_id=g.current_user.organization_id)
+    query = (
+        _user_query_for_current_organization()
+        .filter(User.ativo.is_(True))
+        .order_by(User.nome.asc())
+    )
     users = query.all()
     return jsonify(
         [
@@ -48,9 +60,15 @@ def create_user():
     payload = request.get_json(force=True)
     role = payload.get("role")
     if role not in ALLOWED_ROLES:
-        return jsonify({"ok": False, "message": "Os papeis devem ser um dos seguintes: " + ", ".join(ALLOWED_ROLES)}), 400
+        allowed = ", ".join(sorted(ALLOWED_ROLES))
+        return jsonify(
+            {
+                "ok": False,
+                "message": f"Os papéis devem ser um dos seguintes: {allowed}",
+            }
+        ), 400
 
-    if User.query.filter_by(email=payload["email"], ativo=True).first():
+    if User.query.filter_by(email=payload["email"]).first():
         return jsonify({"ok": False, "message": "Email já está em uso"}), 409
 
     user = User(
@@ -68,10 +86,13 @@ def create_user():
     db.session.commit()
     return jsonify({"ok": True, "data": user_schema.dump(user)}), 201
 
+
 @user_bp.put("/user/<user_id>")
 @admin_required
 def update_user(user_id: str):
-    user = User.query.get_or_404(user_id)
+    user = _user_query_for_current_organization().filter(
+        User.id == uuid_or_404(user_id)
+    ).first_or_404()
 
     payload = request.get_json(force=True)
 
@@ -89,9 +110,9 @@ def update_user(user_id: str):
 @user_bp.delete("/user/<user_id>")
 @admin_required
 def delete_user(user_id: str):
-    user = User.query.get(user_id)
+    user = _user_query_for_current_organization().filter(
+        User.id == uuid_or_404(user_id)
+    ).first_or_404()
     user.ativo = False
     db.session.commit()
-    return jsonify({"ok": True, "message": "Usuário desativado com sucesso"}), 204
-
-
+    return "", 204

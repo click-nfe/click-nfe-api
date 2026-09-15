@@ -32,3 +32,10 @@ def test_legacy_scope_and_preposto_tables_are_not_registered():
     }
 
     assert legacy_tables.isdisjoint(db.metadata.tables)
+
+
+def test_users_require_an_organization():
+    create_app(TestConfig)
+    organization_id = db.metadata.tables["users"].c.organization_id
+
+    assert organization_id.nullable is False

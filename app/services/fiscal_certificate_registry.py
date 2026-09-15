@@ -215,19 +215,15 @@ class FiscalCertificateRegistry:
         row.updated_at = now
 
     def _query(self):
-        query = FiscalCertificate.query
-        if self.organization_id:
-            query = query.filter(
-                FiscalCertificate.organization_id == self.organization_id
-            )
-        return query
+        return FiscalCertificate.query.filter(
+            FiscalCertificate.organization_id == self._require_organization_id()
+        )
 
     def _client(self, client_id) -> Client:
-        query = Client.query.filter(Client.id == client_id)
-        if self.organization_id:
-            query = query.filter(
-                Client.organization_id == self.organization_id
-            )
+        query = Client.query.filter(
+            Client.id == client_id,
+            Client.organization_id == self._require_organization_id(),
+        )
         client = query.first()
         if not client:
             raise FiscalCertificateError("Cliente não encontrado.")
@@ -238,16 +234,22 @@ class FiscalCertificateRegistry:
             ClientFiscalProfile.client_id == client_id,
             ClientFiscalProfile.is_default.is_(True),
         )
-        if self.organization_id:
-            query = query.filter(
-                ClientFiscalProfile.organization_id == self.organization_id
-            )
+        query = query.filter(
+            ClientFiscalProfile.organization_id == self._require_organization_id()
+        )
         profile = query.first()
         if not profile:
             raise FiscalCertificateError(
                 "O cliente não possui perfil fiscal padrão."
             )
         return profile
+
+    def _require_organization_id(self):
+        if not self.organization_id:
+            raise FiscalCertificateError(
+                "O usuário precisa estar vinculado a uma organização."
+            )
+        return self.organization_id
 
     @staticmethod
     def public_data(row: FiscalCertificate) -> dict[str, Any]:

@@ -1,6 +1,6 @@
 # Estratégia de migration inicial do Click NFe
 
-Status: definida após a remoção do domínio legado.
+Status: baseline inicial criada na revisão `8c964dc2a0e2`.
 
 ## Contexto
 
@@ -9,20 +9,21 @@ preservar. O histórico Alembic do projeto de origem não será reaproveitado.
 
 ## Decisão
 
-A primeira migration deve ser gerada somente depois da integração e validação
-dos modelos limpos. Ela será a baseline completa do produto, sem operações de
-alteração ou exclusão de tabelas antigas.
+A primeira migration é a baseline completa do produto, sem operações de
+alteração ou exclusão de tabelas antigas. Ela cria 28 tabelas a partir dos
+modelos limpos e exige `organization_id` em todos os usuários.
 
 Sequência local:
 
 1. iniciar o PostgreSQL local com `docker compose up -d postgres`;
-2. executar `flask --app wsgi.py db init`;
-3. gerar `flask --app wsgi.py db migrate -m "create initial click nfe schema"`;
-4. revisar manualmente o arquivo gerado;
-5. confirmar a ausência das tabelas legadas listadas abaixo;
-6. aplicar `flask --app wsgi.py db upgrade` somente no banco local;
-7. executar a suíte de testes e os smoke tests da API;
-8. versionar o diretório `migrations` em uma nova branch.
+2. confirmar a saúde do container com `docker compose ps`;
+3. aplicar `flask --app wsgi.py db upgrade` somente no banco local;
+4. confirmar `8c964dc2a0e2 (head)` com `flask --app wsgi.py db current`;
+5. executar a suíte de testes e os smoke tests da API.
+
+O diretório `migrations` já está inicializado e não se deve executar novamente
+`flask db init`. Novas alterações de modelo devem gerar revisões incrementais
+com `flask db migrate`.
 
 ## Estruturas que não podem aparecer
 
@@ -39,7 +40,14 @@ Sequência local:
 - o deploy não executará `upgrade` automaticamente até existir rollback validado;
 - dados e documentos reais do cliente não entram em fixtures ou migrações.
 
-## Critério para o próximo checkpoint
+## Validações realizadas
 
-A baseline gerada localmente deve criar o schema completo em um banco vazio e
-permitir que a suíte de testes continue aprovada antes de ser publicada.
+- ciclo `upgrade -> downgrade base -> upgrade` em banco vazio descartável;
+- correspondência entre as 28 tabelas criadas e o metadata do SQLAlchemy;
+- geração offline dos SQLs de upgrade e downgrade para o dialeto PostgreSQL;
+- ausência das estruturas legadas listadas acima;
+- enums persistidos como `VARCHAR + CHECK`, evitando tipos residuais após
+  downgrade.
+
+A execução final no PostgreSQL 16 ocorre pelo container definido em
+`compose.yaml`.

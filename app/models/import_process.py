@@ -134,7 +134,15 @@ class ImportPurpose(EnumMixin):
     USE_CONSUMPTION = "use_consumption"
 
 
-def enum_column(enum_cls, *, name: str | None = None, nullable: bool = False, default=None, length: int = 50):
+def enum_column(
+    enum_cls,
+    *,
+    name: str | None = None,
+    nullable: bool = False,
+    default=None,
+    length: int = 50,
+    index: bool = False,
+):
     """Cria Enum como VARCHAR + CHECK constraint, amigável para Alembic/Postgres."""
     return Column(
         SAEnum(
@@ -148,6 +156,7 @@ def enum_column(enum_cls, *, name: str | None = None, nullable: bool = False, de
         ),
         nullable=nullable,
         default=default,
+        index=index,
     )
 
 
@@ -233,7 +242,7 @@ class ExternalProviderConnection(Base):
             "importer_id",
             "provider",
             "environment",
-            name="uq_external_provider_connection_scope",
+            name="uq_external_provider_connection_context",
         ),
     )
 
@@ -722,13 +731,9 @@ class NfeNumberSequence(Base):
         index=True,
     )
 
-    environment = Column(
-        SAEnum(
-            FiscalEnvironment,
-            name="fiscal_environment_enum",
-            values_callable=lambda enum_cls: [item.value for item in enum_cls],
-        ),
-        nullable=False,
+    environment = enum_column(
+        FiscalEnvironment,
+        name="nfe_number_sequence_environment",
         index=True,
     )
 
@@ -748,13 +753,9 @@ class NfeNumberSequence(Base):
     max_number = Column(Integer, nullable=False, default=999999999)
     # NF-e aceita nNF com até 9 dígitos
 
-    status = Column(
-        SAEnum(
-            NfeNumberSequenceStatusEnum,
-            name="nfe_number_sequence_status_enum",
-            values_callable=lambda enum_cls: [item.value for item in enum_cls],
-        ),
-        nullable=False,
+    status = enum_column(
+        NfeNumberSequenceStatusEnum,
+        name="nfe_number_sequence_status",
         default=NfeNumberSequenceStatusEnum.ACTIVE.value,
         index=True,
     )
