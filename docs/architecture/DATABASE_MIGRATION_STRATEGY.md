@@ -1,50 +1,45 @@
-# Estratégia de migração do pipeline de emissão
+# Estratégia de migration inicial do Click NFe
 
-Status: decisão do checkpoint 1.
+Status: definida após a remoção do domínio legado.
 
 ## Contexto
 
-O projeto usa SQLAlchemy e declara Flask-Migrate como dependência, mas o
-repositório não contém um histórico Alembic completo que demonstre a versão
-atual dos bancos implantados. Criar uma revisão automática sem conhecer o
-schema real pode tentar recriar tabelas existentes ou aplicar tipos PostgreSQL
-incompatíveis.
+O Click NFe será iniciado em um PostgreSQL novo, sem dados ou schema legado a
+preservar. O histórico Alembic do projeto de origem não será reaproveitado.
 
 ## Decisão
 
-As tabelas do pipeline são modeladas e testadas neste checkpoint, mas a
-migração de homologação será gerada somente após um inventário somente-leitura
-do banco de destino.
+A primeira migration deve ser gerada somente depois da integração e validação
+dos modelos limpos. Ela será a baseline completa do produto, sem operações de
+alteração ou exclusão de tabelas antigas.
 
-Sequência obrigatória:
+Sequência local:
 
-1. identificar banco, schema e usuário utilizados pela homologação;
-2. exportar nomes de tabelas, colunas, constraints, índices e tipos enum;
-3. comparar o inventário com `db.metadata`;
-4. definir e registrar uma revisão baseline para as estruturas já existentes;
-5. gerar uma revisão apenas para as novas tabelas fiscais;
-6. revisar manualmente o SQL de upgrade e downgrade;
-7. aplicar primeiro em uma cópia ou schema descartável;
-8. executar smoke tests e somente então aplicar em homologação.
+1. iniciar o PostgreSQL local com `docker compose up -d postgres`;
+2. executar `flask --app wsgi.py db init`;
+3. gerar `flask --app wsgi.py db migrate -m "create initial click nfe schema"`;
+4. revisar manualmente o arquivo gerado;
+5. confirmar a ausência das tabelas legadas listadas abaixo;
+6. aplicar `flask --app wsgi.py db upgrade` somente no banco local;
+7. executar a suíte de testes e os smoke tests da API;
+8. versionar o diretório `migrations` em uma nova branch.
 
-## Novas estruturas esperadas
+## Estruturas que não podem aparecer
 
-- `fiscal_certificates`
-- `nfe_issuances`
-- `nfe_issuance_attempts`
-- `nfe_issuance_events`
-- `nfe_protocols`
+- `organization_settings`
+- `scopes`, `scope_versions`, `scope_assignments`, `scope_services`
+- `scope_template`, `scope_prepostos`, `service_catalog`
+- `prepostos` e demais tabelas iniciadas por `preposto_`
 
 ## Restrições
 
-- o inventário não deve imprimir URLs com credenciais;
-- nenhuma migração de produção é executada automaticamente neste checkpoint;
-- homologação e produção usam schemas ou bancos distintos;
-- o deploy da API não deve executar `upgrade` até existir rollback validado;
+- nenhuma migration ou `upgrade` é executada automaticamente pela aplicação;
+- a primeira aplicação ocorre no PostgreSQL local descartável;
+- futuros ambientes usam bancos e credenciais próprios;
+- o deploy não executará `upgrade` automaticamente até existir rollback validado;
 - dados e documentos reais do cliente não entram em fixtures ou migrações.
 
 ## Critério para o próximo checkpoint
 
-O inventário do banco de homologação e a revisão baseline devem estar
-disponíveis para revisão. Depois disso, a migração fiscal pode ser criada,
-testada e publicada sem depender de suposições sobre o ambiente atual.
+A baseline gerada localmente deve criar o schema completo em um banco vazio e
+permitir que a suíte de testes continue aprovada antes de ser publicada.

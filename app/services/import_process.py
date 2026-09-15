@@ -107,7 +107,7 @@ class ImportTaxRuleConflictError(ValueError):
         detail = f" Regras conflitantes: {names}." if names else ""
         super().__init__(
             "Há regras tributárias ativas com a mesma prioridade e "
-            "especificidade em escopos sobrepostos. Ajuste a prioridade, "
+            "critérios sobrepostos. Ajuste a prioridade, "
             f"vigência, NCM ou demais filtros antes de continuar.{detail}"
         )
 
@@ -1056,7 +1056,7 @@ class ImportNfeService:
     # Provider connections
     # ------------------------------------------------------------------
     def create_provider_connection(self, payload: dict[str, Any]) -> ExternalProviderConnection:
-        """Cria ou atualiza a conexão do mesmo escopo, provider e ambiente."""
+        """Cria ou atualiza a conexão do mesmo contexto, provider e ambiente."""
         now = datetime.utcnow()
         organization_id = self._require_organization_id()
         importer_id = payload.get("importer_id")

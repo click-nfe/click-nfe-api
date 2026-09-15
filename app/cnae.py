@@ -44,7 +44,7 @@ def normalize_cnae_list(value: Any) -> str:
 
 
 def company_cnaes(payload: dict[str, Any]) -> tuple[str, str]:
-    """Converte o payload da BrasilAPI para os campos textuais do escopo."""
+    """Converte o payload da BrasilAPI para os campos cadastrais do cliente."""
 
     principal = format_cnae(
         payload.get("cnae_fiscal"),

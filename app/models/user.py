@@ -33,14 +33,6 @@ class User(PasswordMixin, TimestampMixin, Base):
         cascade="all, delete-orphan",
     )
 
-    assigned_scopes = relationship(
-        "ScopeAssignment",
-        foreign_keys="ScopeAssignment.user_id",
-        back_populates="user",
-        lazy=True,
-    )
-
-
 class AdminProfile(TimestampMixin, Base):
     __tablename__ = "admin_profiles"
 
