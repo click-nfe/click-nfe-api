@@ -47,13 +47,6 @@ class Client(TimestampMixin, Base):
         order_by="desc(ClientContact.principal), ClientContact.nome.asc()",
     )
 
-    scope = relationship(
-        "Scope",
-        back_populates="client",
-        lazy=True,
-        uselist=False,
-    )
-
     __table_args__ = (
         UniqueConstraint("organization_id", "cnpj", name="uq_clients_org_cnpj"),
     )

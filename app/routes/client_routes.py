@@ -2,11 +2,10 @@ from flask import Blueprint, g, jsonify, request
 from marshmallow import ValidationError
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import selectinload
 
 from ..auth import auth_required
 from ..extensions import db
-from ..models import Client, Scope
+from ..models import Client
 from ..schemas import (
     ClientCreateSchema,
     ClientListQuerySchema,
@@ -23,7 +22,7 @@ client_update_schema = ClientUpdateSchema()
 
 
 def _client_query_for_user():
-    q = Client.query.options(selectinload(Client.scope))
+    q = Client.query
     if g.current_user.organization_id:
         q = q.filter(Client.organization_id == g.current_user.organization_id)
     return q
@@ -130,41 +129,3 @@ def update_client(client_id: str):
 
     db.session.commit()
     return jsonify(client_schema.dump(client))
-
-
-@client_bp.get("/<client_id>/scopes")
-@auth_required
-def list_client_scopes(client_id: str):
-    _client_query_for_user().filter(Client.id == client_id).first_or_404()
-
-    status = request.args.get("status")
-    limit = min(max(int(request.args.get("limit", 20)), 1), 200)
-    offset = max(int(request.args.get("offset", 0)), 0)
-
-    query = Scope.query.filter_by(client_id=client_id)
-    if g.current_user.organization_id:
-        query = query.filter(Scope.organization_id == g.current_user.organization_id)
-    if status:
-        query = query.filter(Scope.status == status)
-
-    total = query.count()
-    scopes = query.order_by(Scope.updated_at.desc().nullslast(), Scope.created_at.desc()).limit(limit).offset(offset).all()
-
-    return jsonify(
-        {
-            "items": [
-                {
-                    "id": str(scope.id),
-                    "status": scope.status,
-                    "version": scope.version,
-                    "updated_at": scope.updated_at.isoformat() + "Z" if scope.updated_at else None,
-                    "last_published_at": scope.last_published_at.isoformat() + "Z" if scope.last_published_at else None,
-                    "responsible_user_id": str(scope.responsible_user_id) if scope.responsible_user_id else None,
-                }
-                for scope in scopes
-            ],
-            "total": total,
-            "limit": limit,
-            "offset": offset,
-        }
-    )

@@ -38,11 +38,7 @@ def create_app(config_object=Config):
     migrate.init_app(app, db, compare_type=True)
 
     from .routes.auth_routes import auth_bp
-    from .routes.dashboard_routes import dashboard_bp
-    from .routes.scope_routes import scope_bp
     from .routes.user_routes import user_bp
-    from .routes.admin_routes import admin_bp
-    from .routes.prepostos import prepostos_bp
     from .routes.client_routes import client_bp
     from .routes.organization_routes import organization_bp
     from .routes.client_fiscal_profile_routes import client_fiscal_profile_bp
@@ -59,11 +55,7 @@ def create_app(config_object=Config):
     from .routes.fiscal_reference_routes import fiscal_reference_bp
 
     app.register_blueprint(auth_bp)
-    app.register_blueprint(scope_bp)
-    app.register_blueprint(dashboard_bp)
     app.register_blueprint(user_bp)
-    app.register_blueprint(admin_bp)
-    app.register_blueprint(prepostos_bp)
     app.register_blueprint(client_bp)
     app.register_blueprint(organization_bp)
     app.register_blueprint(import_process_bp)
@@ -76,12 +68,6 @@ def create_app(config_object=Config):
     app.register_blueprint(nfe_context_bp)
     app.register_blueprint(nfe_carrier_bp)
     app.register_blueprint(fiscal_reference_bp)
-
-    from .scope_cnae_cli import scope_cnae_cli
-    from .preposto_catalog_cli import preposto_catalog_cli
-
-    app.cli.add_command(scope_cnae_cli)
-    app.cli.add_command(preposto_catalog_cli)
 
     @app.get("/health")
     def health():

@@ -92,9 +92,9 @@ python -m pytest -q
 
 ## Migrations
 
-O Flask-Migrate está inicializado na aplicação. Como o Click NFe utilizará um banco novo, a migration inicial definitiva será criada depois da remoção dos modelos legados de escopos e prepostos. Isso evita levar tabelas que não pertencem ao novo produto para o schema inicial.
+O Flask-Migrate está inicializado na aplicação. O Click NFe utilizará um banco novo e os modelos legados já foram removidos, portanto a primeira migration poderá representar diretamente o schema inicial do produto.
 
-Depois desse checkpoint, o fluxo será:
+Depois de integrar e validar este checkpoint, gere a migration no ambiente local:
 
 ```bash
 flask --app wsgi.py db init
@@ -103,6 +103,8 @@ flask --app wsgi.py db upgrade
 ```
 
 O diretório gerado de migrations deverá ser versionado.
+
+Antes de executar o `upgrade`, revise o arquivo gerado e confirme que ele não contém tabelas de escopos, prepostos ou configurações herdadas da Casco.
 
 ## Configuração
 
@@ -124,6 +126,6 @@ Certificados A1, senhas e credenciais do Portal Único não devem ser persistido
 - `env:` durante o desenvolvimento local;
 - `gcp:` para futura integração com o Google Secret Manager.
 
-## Escopo atual
+## Domínio atual
 
-Este repositório foi originado do projeto Triagem Aduaneira. A remoção definitiva das funcionalidades de escopos e prepostos será feita em um checkpoint separado, preservando clientes, organizações e o fluxo DUIMP/NF-e.
+O backend preserva organizações, usuários, clientes, referências fiscais e o fluxo completo de preparação da NF-e por DUIMP. Funcionalidades herdadas de escopos comerciais, prepostos e o dashboard antigo da Casco não fazem parte do Click NFe.

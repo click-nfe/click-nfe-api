@@ -55,7 +55,7 @@ def api():
         db.drop_all()
 
 
-def test_create_client_normalizes_cnpj_and_scopes_organization(api):
+def test_create_client_normalizes_cnpj_and_assigns_organization(api):
     client, headers = api
 
     response = client.post(
@@ -183,108 +183,48 @@ def test_fiscal_profile_rejects_cnpj_from_another_client(api):
     )
 
 
-def test_client_list_exposes_scope_metadata(api):
+def test_client_list_does_not_expose_legacy_scope_metadata(api):
     client, headers = api
-    created_client = client.post(
+    created = client.post(
         "/clients",
         headers=headers,
         json={
             "cnpj": "03.114.340/0001-31",
             "razao_social": "ORDEMILK LTDA.",
         },
-    ).get_json()
-
-    before_scope = client.get("/clients", headers=headers).get_json()["items"][0]
-    assert before_scope["scope_id"] is None
-    assert before_scope["has_scope"] is False
-
-    created_scope = client.post(
-        f"/scopes?clientId={created_client['id']}",
-        headers=headers,
-        json={},
     )
-    assert created_scope.status_code == 201
+    assert created.status_code == 201
 
-    after_scope = client.get("/clients", headers=headers).get_json()["items"][0]
-    assert after_scope["scope_id"] == created_scope.get_json()["id"]
-    assert after_scope["has_scope"] is True
-
-
-def test_create_scope_for_client_rejects_second_scope(api):
-    client, headers = api
-    created_client = client.post(
-        "/clients",
-        headers=headers,
-        json={
-            "cnpj": "03.114.340/0001-31",
-            "razao_social": "ORDEMILK LTDA.",
-        },
-    ).get_json()
-
-    first_scope = client.post(
-        f"/scopes?clientId={created_client['id']}",
-        headers=headers,
-        json={},
-    )
-    second_scope = client.post(
-        f"/scopes?clientId={created_client['id']}",
-        headers=headers,
-        json={},
-    )
-
-    assert first_scope.status_code == 201
-    assert second_scope.status_code == 409
-    assert second_scope.get_json() == {
-        "error": "client_scope_already_exists",
-        "message": "Este cliente já possui um escopo.",
-        "client_id": created_client["id"],
-        "scope_id": first_scope.get_json()["id"],
-    }
+    item = client.get("/clients", headers=headers).get_json()["items"][0]
+    assert item["id"] == created.get_json()["id"]
+    assert "scope_id" not in item
+    assert "has_scope" not in item
 
 
-def test_multiple_scopes_without_client_remain_allowed(api):
+def test_organization_response_does_not_expose_casco_fixed_info(api):
     client, headers = api
 
-    first_scope = client.post("/scopes", headers=headers, json={})
-    second_scope = client.post("/scopes", headers=headers, json={})
+    response = client.get("/organizations/me", headers=headers)
 
-    assert first_scope.status_code == 201
-    assert second_scope.status_code == 201
-    assert first_scope.get_json()["id"] != second_scope.get_json()["id"]
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["organization"]["slug"] == "org-teste"
+    assert "fixedInfo" not in body
 
 
-def test_updating_scope_rejects_client_used_by_another_scope(api):
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/scopes",
+        "/prepostos",
+        "/dashboards/admin",
+        "/admin/settings",
+        "/organizations/me/settings",
+    ],
+)
+def test_legacy_routes_are_not_registered(api, path):
     client, headers = api
-    created_client = client.post(
-        "/clients",
-        headers=headers,
-        json={
-            "cnpj": "03.114.340/0001-31",
-            "razao_social": "ORDEMILK LTDA.",
-        },
-    ).get_json()
-    existing_scope = client.post(
-        f"/scopes?clientId={created_client['id']}",
-        headers=headers,
-        json={},
-    ).get_json()
-    orphan_scope = client.post("/scopes", headers=headers, json={}).get_json()
 
-    response = client.put(
-        f"/scopes/{orphan_scope['id']}",
-        headers=headers,
-        json={
-            "sobreEmpresa": {
-                "cnpj": "03.114.340/0001-31",
-                "razaoSocial": "ORDEMILK LTDA.",
-            }
-        },
-    )
+    response = client.get(path, headers=headers)
 
-    assert response.status_code == 409
-    assert response.get_json() == {
-        "error": "client_scope_already_exists",
-        "message": "Este cliente já possui um escopo.",
-        "client_id": created_client["id"],
-        "scope_id": existing_scope["id"],
-    }
+    assert response.status_code == 404
