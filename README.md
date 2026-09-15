@@ -92,19 +92,33 @@ python -m pytest -q
 
 ## Migrations
 
-O Flask-Migrate está inicializado na aplicação. O Click NFe utilizará um banco novo e os modelos legados já foram removidos, portanto a primeira migration poderá representar diretamente o schema inicial do produto.
+O Flask-Migrate está inicializado e a revisão `8c964dc2a0e2` representa o schema
+inicial completo do Click NFe em um banco novo. Ela cria 28 tabelas e não contém
+as estruturas legadas de escopos, prepostos ou configurações Casco.
 
-Depois de integrar e validar este checkpoint, gere a migration no ambiente local:
+Para aplicar a baseline no PostgreSQL do Docker:
 
 ```bash
-flask --app wsgi.py db init
-flask --app wsgi.py db migrate -m "create initial click nfe schema"
+docker compose up -d postgres
+docker compose ps
 flask --app wsgi.py db upgrade
+flask --app wsgi.py db current
 ```
 
-O diretório gerado de migrations deverá ser versionado.
+O resultado esperado de `db current` é:
 
-Antes de executar o `upgrade`, revise o arquivo gerado e confirme que ele não contém tabelas de escopos, prepostos ou configurações herdadas da Casco.
+```text
+8c964dc2a0e2 (head)
+```
+
+Para remover integralmente o schema em um banco local descartável:
+
+```bash
+flask --app wsgi.py db downgrade base
+```
+
+Não execute o downgrade em um banco que contenha dados que devam ser
+preservados.
 
 ## Configuração
 
