@@ -1,64 +1,25 @@
 from datetime import datetime
-import re
 
 from flask import Blueprint, g, jsonify, request
-from sqlalchemy.exc import IntegrityError
 
 from ..auth import auth_required, decode_token, generate_tokens, serialize_identity
 from ..extensions import db
-from ..models import Organization, RefreshToken, User
-from ..schemas import LoginSchema, RefreshSchema, RegisterSchema
+from ..models import RefreshToken, User
+from ..schemas import LoginSchema, RefreshSchema
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/auth")
 login_schema = LoginSchema()
 refresh_schema = RefreshSchema()
-register_schema = RegisterSchema()
-
-
-def _slugify(text: str) -> str:
-    base = re.sub(r"[^a-zA-Z0-9]+", "-", text.lower()).strip("-")
-    return base or "org"
-
-
-@auth_bp.post("/register")
-def register():
-    payload = register_schema.load(request.get_json(force=True))
-
-    if User.query.filter_by(email=payload["email"]).first():
-        return jsonify({"error": "Email já cadastrado"}), 409
-
-    slug = payload.get("organization_slug") or _slugify(payload["organization_nome"])
-    organization = Organization(
-        nome=payload["organization_nome"],
-        slug=slug,
-        cnpj=payload.get("organization_cnpj"),
-    )
-    try:
-        db.session.add(organization)
-        db.session.flush()
-
-        user = User(
-            nome=payload["nome"],
-            email=payload["email"],
-            role="admin",
-            setor=payload.get("setor"),
-            organization_id=organization.id,
-        )
-        user.set_password(payload["password"])
-        db.session.add(user)
-        db.session.commit()
-    except IntegrityError:
-        db.session.rollback()
-        return jsonify({"error": "Conflito ao criar usuário/organização"}), 409
-
-    return jsonify({"user": serialize_identity(user), "tokens": generate_tokens(user)}), 201
 
 
 @auth_bp.post("/login")
 def login():
     payload = login_schema.load(request.get_json(force=True))
 
-    user = User.query.filter_by(email=payload["email"], ativo=True).first()
+    user = User.query.filter_by(
+        email=payload["email"].strip().casefold(),
+        ativo=True,
+    ).first()
     if (
         not user
         or not user.check_password(payload["password"])

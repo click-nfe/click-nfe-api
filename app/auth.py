@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from functools import wraps
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import jwt
 from flask import current_app, g, jsonify, request
@@ -40,6 +40,7 @@ def _jwt_payload(identity, principal_type: str, token_type: str, expires_in: int
         "role": ADMIN_ROLE if principal_type == "admin" else identity.role,
         "principal_type": principal_type,
         "type": token_type,
+        "jti": str(uuid4()),
         "iat": now,
         "exp": now + timedelta(seconds=expires_in),
     }

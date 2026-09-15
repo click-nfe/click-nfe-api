@@ -53,6 +53,7 @@ def create_app(config_object=Config):
     )
     from .routes.nfe_carrier_routes import nfe_carrier_bp
     from .routes.fiscal_reference_routes import fiscal_reference_bp
+    from .dev_cli import dev_cli
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(user_bp)
@@ -68,6 +69,7 @@ def create_app(config_object=Config):
     app.register_blueprint(nfe_context_bp)
     app.register_blueprint(nfe_carrier_bp)
     app.register_blueprint(fiscal_reference_bp)
+    app.cli.add_command(dev_cli)
 
     @app.get("/health")
     def health():

@@ -111,6 +111,27 @@ O resultado esperado de `db current` é:
 8c964dc2a0e2 (head)
 ```
 
+### Criar o acesso administrativo local
+
+Com `APP_ENV=development`, crie ou atualize uma organização e seu primeiro
+administrador pelo comando idempotente:
+
+```bash
+flask --app wsgi.py dev seed-admin \
+  --organization-name "Click NFe Demo" \
+  --organization-slug "click-nfe-demo" \
+  --name "Administrador Local" \
+  --email "admin@clicknfe.local"
+```
+
+A senha é solicitada e confirmada sem aparecer no terminal. Ela não deve ser
+incluída no Git. Executar novamente o comando atualiza o usuário e permite
+trocar sua senha local.
+
+O comando recusa execução quando `APP_ENV` não é `development`. A API também
+não expõe cadastro público: organizações e administradores são provisionados
+por processo controlado.
+
 Para remover integralmente o schema em um banco local descartável:
 
 ```bash
@@ -130,6 +151,7 @@ preservados.
 | `JWT_ACCESS_EXPIRES_SECONDS` | Validade do access token | `3600` |
 | `JWT_REFRESH_EXPIRES_SECONDS` | Validade do refresh token | `604800` |
 | `NFE_XSD_PATH` | Caminho alternativo para o XSD da NF-e | schema incluído na aplicação |
+| `DEV_ADMIN_*` | Valores opcionais para o bootstrap administrativo local | consultar `.env.example` |
 
 As variáveis `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER` e `DB_PASSWORD` continuam aceitas como fallback quando `DATABASE_URL` não for fornecida.
 
@@ -145,9 +167,9 @@ Certificados A1, senhas e credenciais do Portal Único não devem ser persistido
 Todo usuário operacional do Click NFe pertence obrigatoriamente a uma única
 organização. Não há superadministrador global nesta fase do produto.
 
-- o cadastro público cria uma nova organização e seu primeiro usuário `admin`;
+- não existe cadastro público de organizações ou usuários;
+- no desenvolvimento, o primeiro `admin` é criado pelo comando `dev seed-admin`;
 - usuários adicionais são criados por um `admin` da própria organização;
-- um usuário não pode escolher uma organização existente no cadastro público;
 - recursos de clientes e do fluxo fiscal são sempre consultados com o
   `organization_id` do usuário autenticado;
 - organizações inativas não podem autenticar nem renovar sessões;
