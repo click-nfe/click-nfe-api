@@ -126,6 +126,20 @@ Certificados A1, senhas e credenciais do Portal Único não devem ser persistido
 - `env:` durante o desenvolvimento local;
 - `gcp:` para futura integração com o Google Secret Manager.
 
+## Isolamento entre organizações
+
+Todo usuário operacional do Click NFe pertence obrigatoriamente a uma única
+organização. Não há superadministrador global nesta fase do produto.
+
+- o cadastro público cria uma nova organização e seu primeiro usuário `admin`;
+- usuários adicionais são criados por um `admin` da própria organização;
+- um usuário não pode escolher uma organização existente no cadastro público;
+- recursos de clientes e do fluxo fiscal são sempre consultados com o
+  `organization_id` do usuário autenticado;
+- organizações inativas não podem autenticar nem renovar sessões;
+- recursos de outra organização são tratados como não encontrados, sem revelar
+  sua existência.
+
 ## Domínio atual
 
 O backend preserva organizações, usuários, clientes, referências fiscais e o fluxo completo de preparação da NF-e por DUIMP. Funcionalidades herdadas de escopos comerciais, prepostos e o dashboard antigo da Casco não fazem parte do Click NFe.

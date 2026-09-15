@@ -95,6 +95,20 @@ def auth_required(fn):
         identity = resolve_identity(payload["sub"])
         if not identity or not identity.ativo:
             return jsonify({"error": "User not found or inactive"}), 401
+        if not identity.organization_id or not identity.organization:
+            return jsonify(
+                {
+                    "error": "organization_required",
+                    "message": "O usuário precisa estar vinculado a uma organização.",
+                }
+            ), 403
+        if not identity.organization.ativo:
+            return jsonify(
+                {
+                    "error": "organization_inactive",
+                    "message": "A organização do usuário está inativa.",
+                }
+            ), 403
 
         g.current_user = identity
         g.current_user_type = "admin" if identity.role == ADMIN_ROLE else "user"

@@ -3,7 +3,6 @@ import re
 
 from flask import Blueprint, g, jsonify, request
 from sqlalchemy.exc import IntegrityError
-from werkzeug.security import generate_password_hash
 
 from ..auth import auth_required, decode_token, generate_tokens, serialize_identity
 from ..extensions import db
@@ -28,32 +27,25 @@ def register():
     if User.query.filter_by(email=payload["email"]).first():
         return jsonify({"error": "Email já cadastrado"}), 409
 
-    organization = None
-    if payload.get("organization_id"):
-        organization = Organization.query.get(payload["organization_id"])
-        if not organization:
-            return jsonify({"error": "Organização não encontrada"}), 404
-    else:
-        slug = payload.get("organization_slug") or _slugify(payload["organization_nome"])
-        organization = Organization(
-            nome=payload["organization_nome"],
-            slug=slug,
-            cnpj=payload.get("organization_cnpj"),
-        )
+    slug = payload.get("organization_slug") or _slugify(payload["organization_nome"])
+    organization = Organization(
+        nome=payload["organization_nome"],
+        slug=slug,
+        cnpj=payload.get("organization_cnpj"),
+    )
+    try:
         db.session.add(organization)
         db.session.flush()
 
-    user = User(
-        nome=payload["nome"],
-        email=payload["email"],
-        role=payload["role"],
-        setor=payload.get("setor"),
-        organization_id=organization.id,
-    )
-    user.set_password(payload["password"])
-
-    db.session.add(user)
-    try:
+        user = User(
+            nome=payload["nome"],
+            email=payload["email"],
+            role="admin",
+            setor=payload.get("setor"),
+            organization_id=organization.id,
+        )
+        user.set_password(payload["password"])
+        db.session.add(user)
         db.session.commit()
     except IntegrityError:
         db.session.rollback()
@@ -67,7 +59,12 @@ def login():
     payload = login_schema.load(request.get_json(force=True))
 
     user = User.query.filter_by(email=payload["email"], ativo=True).first()
-    if not user or not user.check_password(payload["password"]):
+    if (
+        not user
+        or not user.check_password(payload["password"])
+        or not user.organization
+        or not user.organization.ativo
+    ):
         return jsonify({"error": "Invalid credentials"}), 401
 
     return jsonify({"user": serialize_identity(user), "tokens": generate_tokens(user)})
@@ -91,7 +88,12 @@ def refresh():
         return jsonify({"error": "Refresh token expired or revoked"}), 401
 
     identity = persisted.user
-    if not identity or not identity.ativo:
+    if (
+        not identity
+        or not identity.ativo
+        or not identity.organization
+        or not identity.organization.ativo
+    ):
         return jsonify({"error": "Invalid user"}), 401
 
     persisted.revoked = True

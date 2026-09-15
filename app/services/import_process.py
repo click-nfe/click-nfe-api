@@ -192,61 +192,52 @@ class ImportNfeService:
     # Query helpers
     # ------------------------------------------------------------------
     def import_process_query_for_current_user(self):
-        query = ImportProcess.query
-        if self.organization_id:
-            query = query.filter(ImportProcess.organization_id == self.organization_id)
-        return query
+        return ImportProcess.query.filter(
+            ImportProcess.organization_id == self._require_organization_id()
+        )
 
     def provider_connection_query_for_current_user(self):
-        query = ExternalProviderConnection.query
-        if self.organization_id:
-            query = query.filter(ExternalProviderConnection.organization_id == self.organization_id)
-        return query
+        return ExternalProviderConnection.query.filter(
+            ExternalProviderConnection.organization_id
+            == self._require_organization_id()
+        )
 
     def nfe_draft_query_for_current_user(self, *, include_removed: bool = False):
-        query = NfeDraft.query
-        if self.organization_id:
-            query = query.filter(NfeDraft.organization_id == self.organization_id)
+        query = NfeDraft.query.filter(
+            NfeDraft.organization_id == self._require_organization_id()
+        )
         if not include_removed:
             query = query.filter(NfeDraft.deleted_at.is_(None))
         return query
 
     def snapshot_query_for_current_user(self):
-        query = DuimpSnapshot.query
-        if self.organization_id:
-            query = query.filter(DuimpSnapshot.organization_id == self.organization_id)
-        return query
+        return DuimpSnapshot.query.filter(
+            DuimpSnapshot.organization_id == self._require_organization_id()
+        )
 
     def item_classification_query_for_current_user(self):
-        query = NfeItemClassification.query
-        if self.organization_id:
-            query = query.filter(
-                NfeItemClassification.organization_id == self.organization_id
-            )
-        return query
+        return NfeItemClassification.query.filter(
+            NfeItemClassification.organization_id
+            == self._require_organization_id()
+        )
 
     def document_plan_query_for_current_user(self):
-        query = NfeDocumentPlan.query
-        if self.organization_id:
-            query = query.filter(
-                NfeDocumentPlan.organization_id == self.organization_id
-            )
-        return query
+        return NfeDocumentPlan.query.filter(
+            NfeDocumentPlan.organization_id == self._require_organization_id()
+        )
 
     def client_fiscal_profile_query_for_current_user(self):
-        query = ClientFiscalProfile.query
-        if self.organization_id:
-            query = query.filter(ClientFiscalProfile.organization_id == self.organization_id)
-        return query
+        return ClientFiscalProfile.query.filter(
+            ClientFiscalProfile.organization_id
+            == self._require_organization_id()
+        )
 
     def import_tax_rule_query_for_current_user(self):
-        query = ClientImportTaxRule.query
-        if self.organization_id:
-            query = query.filter(
-                ClientImportTaxRule.organization_id == self.organization_id
-            )
-        return query
-    
+        return ClientImportTaxRule.query.filter(
+            ClientImportTaxRule.organization_id
+            == self._require_organization_id()
+        )
+
     def get_nfe_draft_or_404(self, draft_id) -> NfeDraft:
         draft = self.nfe_draft_query_for_current_user().filter(NfeDraft.id == draft_id).first()
         if not draft:

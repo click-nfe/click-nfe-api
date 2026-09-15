@@ -14,7 +14,7 @@ class User(PasswordMixin, TimestampMixin, Base):
     organization_id = Column(
         UUID(as_uuid=True),
         ForeignKey("organizations.id"),
-        nullable=True,
+        nullable=False,
         index=True,
     )
 

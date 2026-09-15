@@ -12,7 +12,7 @@ from ..schemas import (
     ClientSchema,
     ClientUpdateSchema,
 )
-from .route_helpers import json_payload, validation_error_response
+from .route_helpers import json_payload, uuid_or_404, validation_error_response
 
 client_bp = Blueprint("clients", __name__, url_prefix="/clients")
 client_schema = ClientSchema()
@@ -22,10 +22,9 @@ client_update_schema = ClientUpdateSchema()
 
 
 def _client_query_for_user():
-    q = Client.query
-    if g.current_user.organization_id:
-        q = q.filter(Client.organization_id == g.current_user.organization_id)
-    return q
+    return Client.query.filter(
+        Client.organization_id == g.current_user.organization_id
+    )
 
 
 @client_bp.post("")
@@ -114,14 +113,18 @@ def list_clients():
 @client_bp.get("/<client_id>")
 @auth_required
 def get_client(client_id: str):
-    client = _client_query_for_user().filter(Client.id == client_id).first_or_404()
+    client = _client_query_for_user().filter(
+        Client.id == uuid_or_404(client_id)
+    ).first_or_404()
     return jsonify(client_schema.dump(client))
 
 
 @client_bp.patch("/<client_id>")
 @auth_required
 def update_client(client_id: str):
-    client = _client_query_for_user().filter(Client.id == client_id).first_or_404()
+    client = _client_query_for_user().filter(
+        Client.id == uuid_or_404(client_id)
+    ).first_or_404()
     payload = client_update_schema.load(request.get_json(force=True))
 
     for key, value in payload.items():
