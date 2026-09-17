@@ -90,7 +90,7 @@ API_URL=http://127.0.0.1:5000
 ### 5. Executar os testes no container
 
 ```bash
-docker compose --profile tools run --rm test
+docker compose --profile tools run --build --rm test
 ```
 
 O alvo `test` instala as dependências de desenvolvimento sem incluí-las na
