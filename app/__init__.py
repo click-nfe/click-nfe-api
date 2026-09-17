@@ -1,6 +1,8 @@
 from flask import Flask, jsonify
 from flask_cors import CORS
 from marshmallow import ValidationError
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 from .config import Config
 from .extensions import db, migrate
@@ -74,6 +76,19 @@ def create_app(config_object=Config):
     @app.get("/health")
     def health():
         return {"status": "ok"}
+
+    @app.get("/health/ready")
+    def readiness():
+        try:
+            db.session.execute(text("SELECT 1"))
+        except SQLAlchemyError:
+            db.session.rollback()
+            return {
+                "status": "unavailable",
+                "database": "unavailable",
+            }, 503
+
+        return {"status": "ok", "database": "ok"}
 
     @app.errorhandler(ValidationError)
     def handle_validation_error(err):
