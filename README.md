@@ -11,7 +11,7 @@ API do Click NFe para preparação, validação e futura emissão de NF-e de imp
 - Marshmallow
 - PostgreSQL 16
 - JWT com access token e refresh token
-- Docker Compose para o banco local
+- Docker Compose para API, migrations e banco local
 
 ## Desenvolvimento local
 
@@ -31,22 +31,80 @@ cp .env.example .env
 
 Edite o arquivo `.env` e substitua `SECRET_KEY` por uma chave local longa e aleatória.
 
-### 2. Iniciar o PostgreSQL
+### 2. Iniciar o ambiente completo
 
 ```bash
-docker compose up -d postgres
+docker compose up --build -d
 docker compose ps
 ```
 
-O banco ficará disponível em `localhost:5432`, utilizando por padrão:
+O Compose executa o ambiente na seguinte ordem:
+
+1. aguarda o healthcheck do PostgreSQL;
+2. executa `flask db upgrade` no serviço descartável `migrate`;
+3. inicia a API com Gunicorn e aguarda o banco responder em `/health/ready`.
+
+A API ficará disponível em `localhost:5000`. O banco ficará disponível em
+`localhost:5432`, utilizando por padrão:
 
 - banco: `click_nfe`
 - usuário: `click_nfe`
 - senha: `click_nfe`
 
 Essas credenciais são exclusivas do ambiente local e podem ser alteradas no `.env`.
+Dentro da rede Docker, a API acessa o banco pelo hostname `postgres`; o
+`DATABASE_URL` com `localhost` continua reservado para a execução Python no host.
 
-### 3. Preparar o ambiente Python
+### 3. Criar o acesso administrativo local
+
+Depois que o serviço `api` estiver saudável, execute:
+
+```bash
+docker compose exec api flask --app wsgi.py dev seed-admin
+```
+
+Os dados da organização, nome e e-mail são lidos de `DEV_ADMIN_*` no `.env`.
+A senha é solicitada e confirmada sem aparecer no terminal.
+
+### 4. Validar o ambiente
+
+```bash
+curl http://localhost:5000/health
+curl http://localhost:5000/health/ready
+docker compose logs --tail=100 api
+```
+
+Respostas esperadas:
+
+```json
+{"status":"ok"}
+{"database":"ok","status":"ok"}
+```
+
+O frontend executado no host deve usar:
+
+```dotenv
+API_URL=http://127.0.0.1:5000
+```
+
+### 5. Executar os testes no container
+
+```bash
+docker compose --profile tools run --rm test
+```
+
+O alvo `test` instala as dependências de desenvolvimento sem incluí-las na
+imagem final da API.
+
+### Desenvolvimento Python fora do container
+
+Se preferir executar somente o PostgreSQL no Docker, use:
+
+```bash
+docker compose up -d postgres
+```
+
+Em seguida, prepare o ambiente Python no host.
 
 No Windows PowerShell:
 
@@ -66,7 +124,7 @@ python -m pip install --upgrade pip
 pip install -r requirements-dev.txt
 ```
 
-### 4. Executar a API
+Execute a API:
 
 ```bash
 flask --app wsgi.py run --debug --port 5000
@@ -84,7 +142,7 @@ Resposta esperada:
 {"status":"ok"}
 ```
 
-### 5. Executar os testes
+Execute os testes:
 
 ```bash
 python -m pytest -q
@@ -96,13 +154,12 @@ O Flask-Migrate está inicializado e a revisão `8c964dc2a0e2` representa o sche
 inicial completo do Click NFe em um banco novo. Ela cria 28 tabelas e não contém
 as estruturas legadas de escopos, prepostos ou configurações Casco.
 
-Para aplicar a baseline no PostgreSQL do Docker:
+No fluxo completo, o serviço `migrate` aplica automaticamente a baseline antes
+de iniciar a API. Para executar a migration manualmente:
 
 ```bash
-docker compose up -d postgres
-docker compose ps
-flask --app wsgi.py db upgrade
-flask --app wsgi.py db current
+docker compose run --rm migrate
+docker compose exec api flask --app wsgi.py db current
 ```
 
 O resultado esperado de `db current` é:
@@ -111,7 +168,7 @@ O resultado esperado de `db current` é:
 8c964dc2a0e2 (head)
 ```
 
-### Criar o acesso administrativo local
+### Bootstrap fora do container
 
 Com `APP_ENV=development`, crie ou atualize uma organização e seu primeiro
 administrador pelo comando idempotente:
@@ -145,15 +202,31 @@ preservados.
 
 | Variável | Finalidade | Padrão local |
 |---|---|---|
-| `DATABASE_URL` | Conexão SQLAlchemy com PostgreSQL | banco do `compose.yaml` |
+| `DATABASE_URL` | Conexão SQLAlchemy no host ou na nuvem | banco local no host |
+| `API_PORT` | Porta publicada pelo Compose | `5000` |
 | `SECRET_KEY` | Assinatura dos tokens JWT | obrigatória |
 | `CORS_ORIGINS` | Origens permitidas, separadas por vírgula | `http://localhost:3000` |
 | `JWT_ACCESS_EXPIRES_SECONDS` | Validade do access token | `3600` |
 | `JWT_REFRESH_EXPIRES_SECONDS` | Validade do refresh token | `604800` |
 | `NFE_XSD_PATH` | Caminho alternativo para o XSD da NF-e | schema incluído na aplicação |
 | `DEV_ADMIN_*` | Valores opcionais para o bootstrap administrativo local | consultar `.env.example` |
+| `WEB_CONCURRENCY` | Processos Gunicorn | `2` |
+| `GUNICORN_THREADS` | Threads por processo | `4` |
+| `GUNICORN_TIMEOUT_SECONDS` | Timeout de requisição do Gunicorn | `120` |
 
 As variáveis `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER` e `DB_PASSWORD` continuam aceitas como fallback quando `DATABASE_URL` não for fornecida.
+
+## Preparação para produção
+
+A imagem executa como usuário sem privilégios, recebe a porta por `PORT`, grava
+logs no stdout e não contém dependências de teste. O serviço de migration é
+separado da inicialização da API; em produção ele deve ser executado como job da
+plataforma antes da nova revisão, evitando que múltiplas instâncias tentem
+aplicar migrations simultaneamente.
+
+O `compose.yaml` é exclusivo do desenvolvimento local. Credenciais de produção,
+certificados e senhas deverão ser injetados pelo Google Secret Manager, sem
+copiar o arquivo `.env` para a imagem.
 
 ## Segredos fiscais
 

@@ -1,7 +1,27 @@
+name: click-nfe
+
+x-api-environment: &api-environment
+  APP_ENV: development
+  PORT: 8080
+  DATABASE_URL: ""
+  DB_HOST: postgres
+  DB_PORT: 5432
+  DB_NAME: ${POSTGRES_DB:-click_nfe}
+  DB_USER: ${POSTGRES_USER:-click_nfe}
+  DB_PASSWORD: ${POSTGRES_PASSWORD:-click_nfe}
+
+x-api-service: &api-service
+  image: click-nfe-api:local
+  build:
+    context: .
+    target: runtime
+  env_file:
+    - .env
+  environment: *api-environment
+
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: click-nfe-postgres
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-click_nfe}
@@ -18,6 +38,51 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  migrate:
+    <<: *api-service
+    restart: "no"
+    command: ["flask", "--app", "wsgi.py", "db", "upgrade"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *api-service
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-5000}:8080"
+    environment:
+      <<: *api-environment
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+      GUNICORN_THREADS: ${GUNICORN_THREADS:-4}
+      GUNICORN_TIMEOUT_SECONDS: ${GUNICORN_TIMEOUT_SECONDS:-120}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=2)
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+
+  test:
+    image: click-nfe-api:test
+    profiles: ["tools"]
+    build:
+      context: .
+      target: test
+    env_file:
+      - .env
+    environment: *api-environment
+    command: ["pytest", "-q"]
 
 volumes:
   click_nfe_postgres_data:
