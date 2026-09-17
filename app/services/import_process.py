@@ -528,6 +528,61 @@ class ImportNfeService:
             **params,
         }
 
+    def get_import_process_dashboard_summary(self) -> dict[str, Any]:
+        rows = (
+            self.import_process_query_for_current_user()
+            .with_entities(
+                ImportProcess.status,
+                func.count(ImportProcess.id),
+            )
+            .group_by(ImportProcess.status)
+            .all()
+        )
+        by_status = {
+            status: 0
+            for status in ImportProcessStatus.values()
+        }
+        for status, count in rows:
+            by_status[self._enum_value(status)] = int(count)
+
+        terminal_statuses = {
+            ImportProcessStatus.AUTHORIZED.value,
+            ImportProcessStatus.CANCELLED.value,
+        }
+        ready_for_emission_statuses = {
+            ImportProcessStatus.DRAFT_READY.value,
+            ImportProcessStatus.XML_GENERATED.value,
+            ImportProcessStatus.XML_VALIDATED.value,
+            ImportProcessStatus.XML_SIGNED.value,
+            ImportProcessStatus.TRANSMISSION_PENDING.value,
+        }
+        attention_required_statuses = {
+            ImportProcessStatus.DUIMP_FETCH_FAILED.value,
+            ImportProcessStatus.DRAFT_VALIDATION_FAILED.value,
+            ImportProcessStatus.XML_VALIDATION_FAILED.value,
+            ImportProcessStatus.REJECTED.value,
+            ImportProcessStatus.FAILED.value,
+        }
+
+        return {
+            "total": sum(by_status.values()),
+            "in_progress": sum(
+                count
+                for status, count in by_status.items()
+                if status not in terminal_statuses
+            ),
+            "ready_for_emission": sum(
+                by_status[status]
+                for status in ready_for_emission_statuses
+            ),
+            "attention_required": sum(
+                by_status[status]
+                for status in attention_required_statuses
+            ),
+            "completed": by_status[ImportProcessStatus.AUTHORIZED.value],
+            "by_status": by_status,
+        }
+
     def list_import_process_client_groups(
         self,
         params: dict[str, Any],
