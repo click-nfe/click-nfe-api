@@ -114,6 +114,12 @@ def list_import_processes():
         return validation_error_response(exc)
 
 
+@import_process_bp.get("/dashboard-summary")
+@auth_required
+def get_import_process_dashboard_summary():
+    return jsonify(_service().get_import_process_dashboard_summary())
+
+
 @import_process_bp.get("/client-groups")
 @auth_required
 def list_import_process_client_groups():

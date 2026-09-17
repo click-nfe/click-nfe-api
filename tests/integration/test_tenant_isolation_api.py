@@ -5,7 +5,14 @@ import pytest
 
 from app import create_app
 from app.extensions import db
-from app.models import Client, Organization, RefreshToken, User
+from app.models import (
+    Client,
+    ImportProcess,
+    ImportProcessStatus,
+    Organization,
+    RefreshToken,
+    User,
+)
 
 
 class TestConfig:
@@ -91,12 +98,17 @@ def tenant_api():
             name="Admin Inativo",
             email="admin-inativo@example.invalid",
         )
+        client_a = Client(
+            organization_id=organization_a.id,
+            cnpj="00000000000191",
+            razao_social="Cliente da Organização A",
+        )
         client_b = Client(
             organization_id=organization_b.id,
             cnpj="03114340000131",
             razao_social="Cliente da Organização B",
         )
-        db.session.add(client_b)
+        db.session.add_all([client_a, client_b])
         inactive_refresh_token = _token(
             app,
             inactive_admin,
@@ -122,6 +134,7 @@ def tenant_api():
             "member_b": member_b,
             "inactive_admin": inactive_admin,
             "inactive_refresh_token": inactive_refresh_token,
+            "client_a": client_a,
             "client_b": client_b,
             "headers_a": {
                 "Authorization": f"Bearer {_token(app, admin_a)}"
@@ -217,6 +230,65 @@ def test_client_from_another_organization_is_not_found(tenant_api):
     )
 
     assert response.status_code == 404
+
+
+def test_dashboard_summary_counts_only_current_organization(tenant_api):
+    organization_a = tenant_api["organization_a"]
+    organization_b = tenant_api["organization_b"]
+    client_a = tenant_api["client_a"]
+    client_b = tenant_api["client_b"]
+    admin_a = tenant_api["admin_a"]
+    admin_b = tenant_api["admin_b"]
+    now = datetime.utcnow()
+
+    statuses_a = [
+        ImportProcessStatus.CREATED,
+        ImportProcessStatus.DRAFT_READY,
+        ImportProcessStatus.XML_VALIDATION_FAILED,
+        ImportProcessStatus.AUTHORIZED,
+        ImportProcessStatus.CANCELLED,
+    ]
+    for index, status in enumerate(statuses_a, start=1):
+        db.session.add(
+            ImportProcess(
+                organization_id=organization_a.id,
+                importer_id=client_a.id,
+                reference_code=f"ORG-A-{index}",
+                status=status.value,
+                source="manual",
+                created_by_user_id=admin_a.id,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    db.session.add(
+        ImportProcess(
+            organization_id=organization_b.id,
+            importer_id=client_b.id,
+            reference_code="ORG-B-1",
+            status=ImportProcessStatus.DRAFT_READY.value,
+            source="manual",
+            created_by_user_id=admin_b.id,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    db.session.commit()
+
+    response = tenant_api["client"].get(
+        "/import-processes/dashboard-summary",
+        headers=tenant_api["headers_a"],
+    )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["total"] == 5
+    assert body["in_progress"] == 3
+    assert body["ready_for_emission"] == 1
+    assert body["attention_required"] == 1
+    assert body["completed"] == 1
+    assert body["by_status"]["draft_ready"] == 1
+    assert body["by_status"]["authorized"] == 1
 
 
 def test_inactive_organization_cannot_login_or_use_existing_token(tenant_api):
