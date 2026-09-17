@@ -6,6 +6,7 @@ import pytest
 from app import create_app
 from app.extensions import db
 from app.models import Organization, User
+from app.integrations.brasil_api import BrasilApiUnavailableError
 
 
 class TestConfig:
@@ -76,6 +77,68 @@ def test_create_client_normalizes_cnpj_and_assigns_organization(api):
     assert body["nome_resumido"] == "VITTORIA WHEELS"
     assert body["organization_id"] is not None
     assert body["ativo"] is True
+
+
+def test_lookup_cnpj_requires_authentication(api):
+    client, _headers = api
+
+    response = client.get("/clients/lookup/cnpj/03114340000131")
+
+    assert response.status_code == 401
+
+
+def test_lookup_cnpj_returns_normalized_public_data(api, monkeypatch):
+    client, headers = api
+    expected = {
+        "provider": "brasil_api",
+        "cnpj": "03114340000131",
+        "legal_name": "ORDEMILK LTDA.",
+        "trade_name": "ORDEMILK",
+        "registration_status": "ATIVA",
+        "main_activity": {
+            "code": "1051100",
+            "description": "Preparação do leite",
+        },
+        "secondary_activities": [],
+        "address": {},
+        "formatted_address": "RUA EXEMPLO, 10 — CENTRO — TREZE TILIAS/SC",
+        "tax_regime_suggestion": None,
+    }
+    monkeypatch.setattr(
+        "app.routes.client_routes.BrasilApiCnpjClient.lookup",
+        lambda self, cnpj: expected,
+    )
+
+    response = client.get(
+        "/clients/lookup/cnpj/03114340000131",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == expected
+
+
+def test_lookup_cnpj_reports_provider_unavailability(api, monkeypatch):
+    client, headers = api
+
+    def unavailable(self, cnpj):
+        raise BrasilApiUnavailableError("Consulta temporariamente indisponível.")
+
+    monkeypatch.setattr(
+        "app.routes.client_routes.BrasilApiCnpjClient.lookup",
+        unavailable,
+    )
+
+    response = client.get(
+        "/clients/lookup/cnpj/03114340000131",
+        headers=headers,
+    )
+
+    assert response.status_code == 503
+    assert response.get_json() == {
+        "error": "company_lookup_unavailable",
+        "message": "Consulta temporariamente indisponível.",
+    }
 
 
 def test_create_client_returns_existing_id_for_duplicate(api):

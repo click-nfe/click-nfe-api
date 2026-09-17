@@ -1,10 +1,15 @@
-from flask import Blueprint, g, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request
 from marshmallow import ValidationError
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 
 from ..auth import auth_required
 from ..extensions import db
+from ..integrations.brasil_api import (
+    BrasilApiCnpjClient,
+    BrasilApiNotFoundError,
+    BrasilApiUnavailableError,
+)
 from ..models import Client
 from ..schemas import (
     ClientCreateSchema,
@@ -25,6 +30,44 @@ def _client_query_for_user():
     return Client.query.filter(
         Client.organization_id == g.current_user.organization_id
     )
+
+
+@client_bp.get("/lookup/cnpj/<cnpj>")
+@auth_required
+def lookup_client_by_cnpj(cnpj: str):
+    lookup = BrasilApiCnpjClient(
+        base_url=current_app.config.get(
+            "BRASIL_API_BASE_URL",
+            "https://brasilapi.com.br/api",
+        ),
+        timeout_seconds=current_app.config.get(
+            "BRASIL_API_TIMEOUT_SECONDS",
+            8,
+        ),
+    )
+    try:
+        return jsonify(lookup.lookup(cnpj))
+    except ValueError as exc:
+        return jsonify(
+            {
+                "error": "invalid_cnpj",
+                "message": str(exc),
+            }
+        ), 400
+    except BrasilApiNotFoundError as exc:
+        return jsonify(
+            {
+                "error": "company_not_found",
+                "message": str(exc),
+            }
+        ), 404
+    except BrasilApiUnavailableError as exc:
+        return jsonify(
+            {
+                "error": "company_lookup_unavailable",
+                "message": str(exc),
+            }
+        ), 503
 
 
 @client_bp.post("")

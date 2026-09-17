@@ -208,6 +208,8 @@ preservados.
 | `CORS_ORIGINS` | Origens permitidas, separadas por vírgula | `http://localhost:3000` |
 | `JWT_ACCESS_EXPIRES_SECONDS` | Validade do access token | `3600` |
 | `JWT_REFRESH_EXPIRES_SECONDS` | Validade do refresh token | `604800` |
+| `BRASIL_API_BASE_URL` | Provedor público usado na consulta pontual de CNPJ | `https://brasilapi.com.br/api` |
+| `BRASIL_API_TIMEOUT_SECONDS` | Limite da consulta pública de CNPJ | `8` |
 | `NFE_XSD_PATH` | Caminho alternativo para o XSD da NF-e | schema incluído na aplicação |
 | `DEV_ADMIN_*` | Valores opcionais para o bootstrap administrativo local | consultar `.env.example` |
 | `WEB_CONCURRENCY` | Processos Gunicorn | `2` |
@@ -215,6 +217,10 @@ preservados.
 | `GUNICORN_TIMEOUT_SECONDS` | Timeout de requisição do Gunicorn | `120` |
 
 As variáveis `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER` e `DB_PASSWORD` continuam aceitas como fallback quando `DATABASE_URL` não for fornecida.
+
+A rota autenticada `GET /clients/lookup/cnpj/<cnpj>` faz uma consulta pontual
+à BrasilAPI para auxiliar o cadastro. Ela não executa varreduras, não persiste a
+resposta do provedor e retorna somente os dados cadastrais usados pelo formulário.
 
 ## Preparação para produção
 
