@@ -17,6 +17,7 @@ FROM python:3.12-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PATH="/opt/venv/bin:$PATH"
+ENV PYTHONPATH=/app
 ENV PORT=8080
 
 RUN groupadd --system clicknfe \
@@ -44,4 +45,4 @@ COPY --chown=clicknfe:clicknfe tests ./tests
 RUN pip install --no-cache-dir -r requirements-dev.txt
 USER clicknfe
 
-CMD ["pytest", "-q"]
+CMD ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider"]

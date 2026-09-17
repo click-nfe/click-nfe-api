@@ -82,7 +82,7 @@ services:
     env_file:
       - .env
     environment: *api-environment
-    command: ["pytest", "-q"]
+    command: ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider"]
 
 volumes:
   click_nfe_postgres_data:
