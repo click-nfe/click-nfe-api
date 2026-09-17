@@ -137,7 +137,7 @@ def tenant_api():
         db.drop_all()
 
 
-def test_public_registration_creates_new_organization_and_first_admin(tenant_api):
+def test_public_registration_is_not_available(tenant_api):
     response = tenant_api["client"].post(
         "/auth/register",
         json={
@@ -149,38 +149,9 @@ def test_public_registration_creates_new_organization_and_first_admin(tenant_api
         },
     )
 
-    assert response.status_code == 201
-    body = response.get_json()
-    assert body["user"]["role"] == "admin"
-    assert body["user"]["organizationId"]
-
-    organization = Organization.query.filter_by(
-        slug="nova-organizacao"
-    ).one()
-    user = User.query.filter_by(email="novo-admin@example.invalid").one()
-    assert user.organization_id == organization.id
-
-
-def test_public_registration_cannot_join_existing_organization_or_choose_role(
-    tenant_api,
-):
-    response = tenant_api["client"].post(
-        "/auth/register",
-        json={
-            "nome": "Usuário Invasor",
-            "email": "invasor@example.invalid",
-            "password": "senha-segura",
-            "organization_id": str(tenant_api["organization_b"].id),
-            "organization_nome": "Organização Falsa",
-            "role": "admin",
-        },
-    )
-
-    assert response.status_code == 400
-    messages = response.get_json()["messages"]
-    assert "organization_id" in messages
-    assert "role" in messages
-    assert User.query.filter_by(email="invasor@example.invalid").first() is None
+    assert response.status_code == 404
+    assert Organization.query.filter_by(slug="nova-organizacao").first() is None
+    assert User.query.filter_by(email="novo-admin@example.invalid").first() is None
 
 
 def test_user_lists_only_include_current_organization(tenant_api):
