@@ -52,3 +52,27 @@ class FiscalCountry(Base):
     __table_args__ = (
         Index("ix_fiscal_countries_active_validity", "active", "valid_from", "valid_until"),
     )
+
+
+class PostalCodeCache(Base):
+    """Endereço público normalizado e reutilizável por CEP."""
+
+    __tablename__ = "postal_code_cache"
+
+    zip_code = Column(String(8), primary_key=True)
+    street = Column(String(255), nullable=True)
+    complement = Column(String(255), nullable=True)
+    district = Column(String(120), nullable=True)
+    city_code = Column(String(7), nullable=False, index=True)
+    city_name = Column(String(120), nullable=False)
+    state = Column(String(2), nullable=False, index=True)
+    country_code = Column(String(4), nullable=False, default="1058")
+    country_name = Column(String(60), nullable=False, default="Brasil")
+    provider = Column(String(40), nullable=False)
+    fetched_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )

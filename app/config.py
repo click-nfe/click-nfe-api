@@ -66,6 +66,13 @@ class Config:
     BRASIL_API_TIMEOUT_SECONDS = float(
         os.getenv("BRASIL_API_TIMEOUT_SECONDS", "8")
     )
+    VIA_CEP_BASE_URL = os.getenv("VIA_CEP_BASE_URL", "https://viacep.com.br")
+    CEP_LOOKUP_TIMEOUT_SECONDS = float(
+        os.getenv("CEP_LOOKUP_TIMEOUT_SECONDS", "4")
+    )
+    CEP_CACHE_TTL_SECONDS = int(
+        os.getenv("CEP_CACHE_TTL_SECONDS", "2592000")
+    )
     NFE_XSD_PATH = os.getenv(
         "NFE_XSD_PATH",
         str(DEFAULT_NFE_XSD_PATH),
