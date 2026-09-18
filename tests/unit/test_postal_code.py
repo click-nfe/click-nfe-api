@@ -8,6 +8,7 @@ from app.extensions import db
 from app.integrations.postal_code import (
     BrasilApiCepProvider,
     HttpResponse,
+    PostalCodeNotFoundError,
     PostalCodeProviderError,
     ViaCepProvider,
 )
@@ -197,3 +198,34 @@ def test_lookup_returns_stale_cache_when_providers_are_unavailable(app):
     assert result["cache_hit"] is True
     assert result["stale"] is True
     assert result["city_code"] == "4106902"
+
+
+def test_lookup_does_not_return_stale_cache_when_cep_is_not_found(app):
+    stale_time = datetime.utcnow() - timedelta(days=60)
+    db.session.add(
+        PostalCodeCache(
+            zip_code="80050530",
+            street="Rua desatualizada",
+            district="Centro",
+            city_code="4106902",
+            city_name="Curitiba",
+            state="PR",
+            country_code="1058",
+            country_name="Brasil",
+            provider="viacep",
+            fetched_at=stale_time,
+            updated_at=stale_time,
+        )
+    )
+    db.session.commit()
+    providers = [
+        FakeProvider(error=PostalCodeNotFoundError("not found")),
+        FakeProvider(error=PostalCodeNotFoundError("not found")),
+    ]
+    service = PostalCodeLookupService(
+        providers=providers,
+        cache_ttl_seconds=1,
+    )
+
+    with pytest.raises(PostalCodeNotFoundError):
+        service.lookup("80050530")

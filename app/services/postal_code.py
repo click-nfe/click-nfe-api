@@ -3,6 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 import unicodedata
 
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
 from app.extensions import db
 from app.integrations.postal_code import (
     PostalCodeNotFoundError,
@@ -60,9 +63,11 @@ class PostalCodeLookupService:
             except PostalCodeProviderError:
                 continue
 
-        if cached:
-            return self._serialize(cached, cache_hit=True, stale=True)
         if self.providers and not_found_count == len(self.providers):
+            raise PostalCodeNotFoundError("CEP não encontrado.")
+        if cached and not_found_count == 0:
+            return self._serialize(cached, cache_hit=True, stale=True)
+        if not_found_count:
             raise PostalCodeNotFoundError("CEP não encontrado.")
         raise PostalCodeUnavailableError(
             "A consulta de CEP está temporariamente indisponível."
@@ -119,16 +124,51 @@ class PostalCodeLookupService:
         address: dict[str, str],
         existing: PostalCodeCache | None,
     ) -> PostalCodeCache:
-        row = existing or PostalCodeCache(zip_code=zip_code)
-        for field, value in address.items():
-            normalized_value = (
+        now = self.now_factory()
+        values = {
+            field: (
                 value or None
                 if field in {"street", "complement", "district"}
                 else value
             )
-            setattr(row, field, normalized_value)
-        row.provider = provider
-        row.fetched_at = self.now_factory()
+            for field, value in address.items()
+        }
+        values.update(
+            {
+                "zip_code": zip_code,
+                "provider": provider,
+                "fetched_at": now,
+                "updated_at": now,
+            }
+        )
+
+        if existing:
+            for field, value in values.items():
+                setattr(existing, field, value)
+            db.session.flush()
+            return existing
+
+        dialect_name = db.session.get_bind().dialect.name
+        insert_factory = {
+            "postgresql": postgresql_insert,
+            "sqlite": sqlite_insert,
+        }.get(dialect_name)
+        if insert_factory:
+            statement = insert_factory(PostalCodeCache).values(**values)
+            statement = statement.on_conflict_do_update(
+                index_elements=[PostalCodeCache.zip_code],
+                set_={
+                    field: getattr(statement.excluded, field)
+                    for field in values
+                    if field != "zip_code"
+                },
+            )
+            db.session.execute(statement)
+            row = db.session.get(PostalCodeCache, zip_code)
+            if row:
+                return row
+
+        row = PostalCodeCache(**values)
         db.session.add(row)
         db.session.flush()
         return row
