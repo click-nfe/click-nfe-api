@@ -128,6 +128,43 @@ def test_search_municipalities_accepts_ibge_code(api):
     assert response.get_json()["items"][0]["name"] == "Curitiba"
 
 
+def test_postal_code_lookup_returns_normalized_address(api, monkeypatch):
+    client, headers = api
+    expected = {
+        "zip_code": "80050530",
+        "street": "Rua XV de Novembro",
+        "complement": "",
+        "district": "Centro",
+        "city_code": "4106902",
+        "city_name": "Curitiba",
+        "state": "PR",
+        "country_code": "1058",
+        "country_name": "Brasil",
+        "provider": "viacep",
+        "cache_hit": False,
+        "stale": False,
+        "fetched_at": "2026-09-18T16:45:00",
+    }
+
+    class FakeService:
+        def lookup(self, zip_code):
+            assert zip_code == "80050530"
+            return expected
+
+    monkeypatch.setattr(
+        "app.routes.fiscal_reference_routes._postal_code_service",
+        lambda: FakeService(),
+    )
+
+    response = client.get(
+        "/fiscal-reference/postal-codes/80050530",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == expected
+
+
 def test_search_countries_respects_nfe_emission_date(api):
     client, headers = api
     current = client.get(
@@ -154,6 +191,7 @@ def test_reference_endpoints_require_authentication(api):
 
     assert client.get("/fiscal-reference/municipalities?q=curitiba").status_code == 401
     assert client.get("/fiscal-reference/countries?q=china").status_code == 401
+    assert client.get("/fiscal-reference/postal-codes/80050530").status_code == 401
 
 
 def test_country_search_rejects_invalid_active_on(api):

@@ -210,6 +210,9 @@ preservados.
 | `JWT_REFRESH_EXPIRES_SECONDS` | Validade do refresh token | `604800` |
 | `BRASIL_API_BASE_URL` | Provedor público usado na consulta pontual de CNPJ | `https://brasilapi.com.br/api` |
 | `BRASIL_API_TIMEOUT_SECONDS` | Limite da consulta pública de CNPJ | `8` |
+| `VIA_CEP_BASE_URL` | Provedor primário usado na consulta pontual de CEP | `https://viacep.com.br` |
+| `CEP_LOOKUP_TIMEOUT_SECONDS` | Limite individual por provedor de CEP | `4` |
+| `CEP_CACHE_TTL_SECONDS` | Validade do endereço em cache antes de nova consulta | `2592000` |
 | `NFE_XSD_PATH` | Caminho alternativo para o XSD da NF-e | schema incluído na aplicação |
 | `DEV_ADMIN_*` | Valores opcionais para o bootstrap administrativo local | consultar `.env.example` |
 | `WEB_CONCURRENCY` | Processos Gunicorn | `2` |
@@ -221,6 +224,12 @@ As variáveis `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER` e `DB_PASSWORD` continu
 A rota autenticada `GET /clients/lookup/cnpj/<cnpj>` faz uma consulta pontual
 à BrasilAPI para auxiliar o cadastro. Ela não executa varreduras, não persiste a
 resposta do provedor e retorna somente os dados cadastrais usados pelo formulário.
+
+A rota autenticada `GET /fiscal-reference/postal-codes/<cep>` consulta primeiro
+o ViaCEP e usa a BrasilAPI como alternativa. O endereço normalizado, inclusive o
+código IBGE do município e o código BACEN do Brasil, é armazenado no PostgreSQL.
+O cache reduz chamadas externas e um registro expirado pode ser utilizado como
+fallback somente quando todos os provedores estiverem indisponíveis.
 
 ## Preparação para produção
 
