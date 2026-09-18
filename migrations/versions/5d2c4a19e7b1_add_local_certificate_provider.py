@@ -54,14 +54,59 @@ def _replace_constraint(values):
 
 def upgrade():
     _replace_constraint(NEW_VALUES)
+    _clear_duplicate_fingerprints()
     with op.batch_alter_table("fiscal_certificates", schema=None) as batch_op:
         batch_op.create_unique_constraint(
             FINGERPRINT_CONSTRAINT_NAME,
             [
                 "organization_id",
                 "client_id",
+                "environment",
                 "certificate_fingerprint_sha256",
             ],
+        )
+
+
+def _clear_duplicate_fingerprints():
+    """Mantém um fingerprint por cliente/ambiente antes da nova unicidade."""
+
+    connection = op.get_bind()
+    rows = connection.execute(
+        sa.text(
+            "SELECT id, organization_id, client_id, environment, "
+            "certificate_fingerprint_sha256, is_active, updated_at "
+            "FROM fiscal_certificates "
+            "WHERE certificate_fingerprint_sha256 IS NOT NULL "
+            "ORDER BY organization_id, client_id, environment, "
+            "certificate_fingerprint_sha256, is_active DESC, updated_at DESC"
+        )
+    ).mappings()
+    seen = set()
+    for row in rows:
+        key = (
+            str(row["organization_id"]),
+            str(row["client_id"]),
+            row["environment"],
+            row["certificate_fingerprint_sha256"],
+        )
+        if key not in seen:
+            seen.add(key)
+            continue
+        connection.execute(
+            sa.text(
+                "UPDATE fiscal_certificates SET "
+                "certificate_fingerprint_sha256 = NULL, "
+                "status = 'pending_validation', is_active = false, "
+                "validation_error = :message "
+                "WHERE id = :certificate_id"
+            ),
+            {
+                "certificate_id": row["id"],
+                "message": (
+                    "Fingerprint duplicado normalizado durante migration; "
+                    "valide o certificado novamente."
+                ),
+            },
         )
 
 

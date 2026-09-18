@@ -128,6 +128,7 @@ class FiscalCertificateRegistry:
         )
         if self._query().filter(
             FiscalCertificate.client_id == client_id,
+            FiscalCertificate.environment == environment_value,
             FiscalCertificate.certificate_fingerprint_sha256
             == loaded.fingerprint_sha256,
         ).first():
@@ -178,7 +179,7 @@ class FiscalCertificateRegistry:
         self._apply_metadata(row, loaded)
         row.status = FiscalCertificateStatus.PENDING_VALIDATION.value
         row.is_active = False
-        db.session.flush()
+        self._flush_certificate(row)
         return row
 
     def activate(self, certificate_id, *, client_id) -> FiscalCertificate:
@@ -201,7 +202,7 @@ class FiscalCertificateRegistry:
         row.status = FiscalCertificateStatus.ACTIVE.value
         row.is_active = True
         row.updated_at = now
-        db.session.flush()
+        self._flush_certificate(row)
         return row
 
     def get(self, certificate_id, *, client_id) -> FiscalCertificate:
@@ -278,6 +279,16 @@ class FiscalCertificateRegistry:
         row.last_validated_at = now
         row.validation_error = None
         row.updated_at = now
+
+    @staticmethod
+    def _flush_certificate(row: FiscalCertificate) -> None:
+        try:
+            db.session.flush()
+        except IntegrityError as exc:
+            db.session.rollback()
+            raise FiscalCertificateError(
+                "Este certificado A1 já está cadastrado para o cliente e ambiente."
+            ) from exc
 
     def _query(self):
         return FiscalCertificate.query.filter(

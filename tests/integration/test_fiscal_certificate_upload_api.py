@@ -95,12 +95,19 @@ def api(tmp_path):
         db.drop_all()
 
 
-def _upload(client, headers, client_id, material, password=None):
+def _upload(
+    client,
+    headers,
+    client_id,
+    material,
+    password=None,
+    environment="production",
+):
     return client.post(
         f"/clients/{client_id}/fiscal-certificates/upload",
         headers=headers,
         data={
-            "environment": "production",
+            "environment": environment,
             "password": (password or material.password.decode("utf-8")),
             "certificate": (
                 io.BytesIO(material.pkcs12_bytes),
@@ -188,6 +195,25 @@ def test_upload_rejects_duplicate_without_creating_new_files(api):
     assert response.status_code == 422
     assert "já está cadastrado" in response.get_json()["message"]
     assert len(list(certificate_dir.rglob("*.enc"))) == 2
+
+
+def test_same_certificate_can_be_used_in_both_environments(api):
+    client, headers, client_id, certificate_dir = api
+    material = certificate_material("00000000000191")
+
+    production = _upload(client, headers, client_id, material)
+    homologation = _upload(
+        client,
+        headers,
+        client_id,
+        material,
+        environment="homologation",
+    )
+
+    assert production.status_code == 201
+    assert homologation.status_code == 201
+    assert homologation.get_json()["environment"] == "homologation"
+    assert len(list(certificate_dir.rglob("*.enc"))) == 4
 
 
 def test_upload_removes_encrypted_files_when_database_commit_fails(
