@@ -24,6 +24,7 @@ from ..extensions import Base
 
 
 class FiscalCredentialProvider(str, Enum):
+    LOCAL_ENCRYPTED_FILE = "local_encrypted_file"
     GCP_SECRET_MANAGER = "gcp_secret_manager"
     GCP_CLOUD_STORAGE = "gcp_cloud_storage"
 

@@ -21,7 +21,9 @@ ENV PYTHONPATH=/app
 ENV PORT=8080
 
 RUN groupadd --system clicknfe \
-    && useradd --system --gid clicknfe --home-dir /app clicknfe
+    && useradd --system --gid clicknfe --home-dir /app clicknfe \
+    && mkdir -p /app/data/certificates \
+    && chown -R clicknfe:clicknfe /app/data
 
 WORKDIR /app
 
