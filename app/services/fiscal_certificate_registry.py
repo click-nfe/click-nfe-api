@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
+
 from app.extensions import db
 from app.models import Client, ClientFiscalProfile
 from app.models.import_process import FiscalEnvironment
@@ -151,6 +153,11 @@ class FiscalCertificateRegistry:
             row.is_active = False
             db.session.flush()
             return row
+        except IntegrityError as exc:
+            self.upload_store.delete(references)
+            raise FiscalCertificateError(
+                "Este certificado A1 já está cadastrado para o cliente."
+            ) from exc
         except Exception:
             self.upload_store.delete(references)
             raise

@@ -11,9 +11,10 @@ from app.schemas.fiscal_certificate import (
 )
 from app.services.fiscal_certificate import (
     CertificateMaterial,
-    DefaultCertificateVault,
     FiscalCertificateError,
     LocalEncryptedFileCertificateVault,
+    StoredCertificateReferences,
+    certificate_vault_from_config,
 )
 from app.services.fiscal_certificate_registry import FiscalCertificateRegistry
 
@@ -55,10 +56,7 @@ def _service() -> FiscalCertificateRegistry:
         upload_store = local_vault
     return FiscalCertificateRegistry(
         current_user=g.current_user,
-        vault=(
-            current_app.config.get("NFE_CERTIFICATE_VAULT")
-            or DefaultCertificateVault(local_vault=local_vault)
-        ),
+        vault=certificate_vault_from_config(current_app.config),
         upload_store=(
             current_app.config.get("NFE_CERTIFICATE_UPLOAD_STORE")
             or upload_store
@@ -141,6 +139,8 @@ def upload_fiscal_certificate(client_id: str):
             413,
         )
 
+    service = None
+    stored_references = None
     try:
         data = upload_schema.load(request.form)
         service = _service()
@@ -152,6 +152,11 @@ def upload_fiscal_certificate(client_id: str):
                 password=data["password"].encode("utf-8"),
             ),
         )
+        stored_references = StoredCertificateReferences(
+            provider=str(getattr(row.provider, "value", row.provider)),
+            certificate_ref=row.certificate_ref,
+            password_ref=row.password_ref,
+        )
         db.session.commit()
     except ValidationError as exc:
         db.session.rollback()
@@ -159,6 +164,11 @@ def upload_fiscal_certificate(client_id: str):
     except FiscalCertificateError as exc:
         db.session.rollback()
         return _error_response(exc, 422)
+    except Exception:
+        db.session.rollback()
+        if service and service.upload_store and stored_references:
+            service.upload_store.delete(stored_references)
+        raise
     return jsonify({"valid": True, **service.public_data(row)}), 201
 
 

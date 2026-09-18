@@ -4,6 +4,7 @@ import pytest
 from app.services.fiscal_certificate import (
     FiscalCertificateError,
     LocalEncryptedFileCertificateVault,
+    certificate_vault_from_config,
 )
 from tests.helpers import certificate_material
 
@@ -61,3 +62,31 @@ def test_local_vault_removes_both_files_on_delete(tmp_path):
     vault.delete(references)
 
     assert list(tmp_path.rglob("*.enc")) == []
+
+
+def test_configured_vault_resolves_material_with_flask_config_key(tmp_path):
+    material = certificate_material("00000000000191")
+    encryption_key = Fernet.generate_key().decode("ascii")
+    local_vault = LocalEncryptedFileCertificateVault(
+        root_dir=tmp_path,
+        encryption_key=encryption_key,
+    )
+    references = local_vault.store(
+        organization_id="11111111-1111-1111-1111-111111111111",
+        client_id="22222222-2222-2222-2222-222222222222",
+        material=material,
+    )
+
+    vault = certificate_vault_from_config(
+        {
+            "NFE_LOCAL_CERTIFICATE_DIR": str(tmp_path),
+            "NFE_LOCAL_CERTIFICATE_KEY": encryption_key,
+            "SECRET_KEY": "not-used",
+        }
+    )
+
+    assert vault.resolve(
+        provider=references.provider,
+        certificate_ref=references.certificate_ref,
+        password_ref=references.password_ref,
+    ) == material

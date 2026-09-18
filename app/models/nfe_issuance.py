@@ -120,6 +120,12 @@ class FiscalCertificate(Base):
             "certificate_ref",
             name="uq_fiscal_certificate_org_ref",
         ),
+        UniqueConstraint(
+            "organization_id",
+            "client_id",
+            "certificate_fingerprint_sha256",
+            name="uq_fiscal_certificate_client_fingerprint",
+        ),
     )
 
 

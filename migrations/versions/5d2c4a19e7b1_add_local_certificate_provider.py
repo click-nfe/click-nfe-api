@@ -16,6 +16,7 @@ depends_on = None
 
 
 CONSTRAINT_NAME = "fiscal_credential_provider"
+FINGERPRINT_CONSTRAINT_NAME = "uq_fiscal_certificate_client_fingerprint"
 OLD_VALUES = ("gcp_secret_manager", "gcp_cloud_storage")
 NEW_VALUES = (
     "local_encrypted_file",
@@ -53,6 +54,15 @@ def _replace_constraint(values):
 
 def upgrade():
     _replace_constraint(NEW_VALUES)
+    with op.batch_alter_table("fiscal_certificates", schema=None) as batch_op:
+        batch_op.create_unique_constraint(
+            FINGERPRINT_CONSTRAINT_NAME,
+            [
+                "organization_id",
+                "client_id",
+                "certificate_fingerprint_sha256",
+            ],
+        )
 
 
 def downgrade():
@@ -67,5 +77,10 @@ def downgrade():
         raise RuntimeError(
             "Não é possível remover o provider local enquanto existirem "
             "certificados cadastrados nele."
+        )
+    with op.batch_alter_table("fiscal_certificates", schema=None) as batch_op:
+        batch_op.drop_constraint(
+            FINGERPRINT_CONSTRAINT_NAME,
+            type_="unique",
         )
     _replace_constraint(OLD_VALUES)

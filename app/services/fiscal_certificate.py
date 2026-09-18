@@ -9,7 +9,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Mapping, Protocol
 
 from cryptography import x509
 from cryptography.fernet import Fernet, InvalidToken
@@ -476,6 +476,23 @@ class DefaultCertificateVault:
         raise FiscalCertificateError(
             "Certificado e senha devem usar o mesmo provider local:, env: ou gcp:."
         )
+
+
+def certificate_vault_from_config(config: Mapping[str, Any]) -> CertificateVault:
+    """Monta o mesmo cofre para cadastro, validação e assinatura."""
+
+    configured = config.get("NFE_CERTIFICATE_VAULT")
+    if configured is not None:
+        return configured
+    local_vault = LocalEncryptedFileCertificateVault(
+        root_dir=config.get(
+            "NFE_LOCAL_CERTIFICATE_DIR",
+            "/app/data/certificates",
+        ),
+        encryption_key=config.get("NFE_LOCAL_CERTIFICATE_KEY"),
+        secret_key=config.get("SECRET_KEY"),
+    )
+    return DefaultCertificateVault(local_vault=local_vault)
 
 
 class A1CertificateInspector:

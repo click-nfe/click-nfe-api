@@ -176,3 +176,33 @@ def test_upload_rejects_certificate_from_another_cnpj(api):
     assert response.status_code == 422
     assert "não corresponde ao emitente" in response.get_json()["message"]
     assert list(certificate_dir.rglob("*.enc")) == []
+
+
+def test_upload_rejects_duplicate_without_creating_new_files(api):
+    client, headers, client_id, certificate_dir = api
+    material = certificate_material("00000000000191")
+
+    assert _upload(client, headers, client_id, material).status_code == 201
+    response = _upload(client, headers, client_id, material)
+
+    assert response.status_code == 422
+    assert "já está cadastrado" in response.get_json()["message"]
+    assert len(list(certificate_dir.rglob("*.enc"))) == 2
+
+
+def test_upload_removes_encrypted_files_when_database_commit_fails(
+    api,
+    monkeypatch,
+):
+    client, headers, client_id, certificate_dir = api
+    material = certificate_material("00000000000191")
+
+    def fail_commit():
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(db.session, "commit", fail_commit)
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        _upload(client, headers, client_id, material)
+
+    assert list(certificate_dir.rglob("*.enc")) == []
