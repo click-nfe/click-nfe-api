@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
+
 from app.extensions import db
 from app.models import Client, ClientFiscalProfile
 from app.models.import_process import FiscalEnvironment
@@ -13,6 +15,8 @@ from app.models.nfe_issuance import (
 )
 from app.services.fiscal_certificate import (
     A1CertificateInspector,
+    CertificateMaterial,
+    CertificateUploadStore,
     CertificateVault,
     DefaultCertificateVault,
     FiscalCertificateError,
@@ -25,11 +29,13 @@ class FiscalCertificateRegistry:
         *,
         current_user: Any,
         vault: CertificateVault | None = None,
+        upload_store: CertificateUploadStore | None = None,
         inspector: A1CertificateInspector | None = None,
     ) -> None:
         self.current_user = current_user
         self.organization_id = getattr(current_user, "organization_id", None)
         self.vault = vault or DefaultCertificateVault()
+        self.upload_store = upload_store
         self.inspector = inspector or A1CertificateInspector()
 
     def list_for_client(self, client_id) -> list[FiscalCertificate]:
@@ -97,6 +103,66 @@ class FiscalCertificateRegistry:
         db.session.flush()
         return row
 
+    def upload(
+        self,
+        *,
+        client_id,
+        environment: str,
+        material: CertificateMaterial,
+    ) -> FiscalCertificate:
+        self._client(client_id)
+        profile = self._fiscal_profile(client_id)
+        environment_value = self._enum_value(
+            FiscalEnvironment,
+            environment,
+            "Ambiente fiscal inválido.",
+        )
+        if self.upload_store is None:
+            raise FiscalCertificateError(
+                "O armazenamento de upload de certificados não está configurado."
+            )
+
+        loaded = self.inspector.load(
+            material,
+            expected_cnpj=profile.cnpj,
+        )
+        if self._query().filter(
+            FiscalCertificate.client_id == client_id,
+            FiscalCertificate.environment == environment_value,
+            FiscalCertificate.certificate_fingerprint_sha256
+            == loaded.fingerprint_sha256,
+        ).first():
+            raise FiscalCertificateError(
+                "Este certificado A1 já está cadastrado para o cliente."
+            )
+
+        references = self.upload_store.store(
+            organization_id=str(self._require_organization_id()),
+            client_id=str(client_id),
+            material=material,
+        )
+        try:
+            row = self.register(
+                client_id=client_id,
+                environment=environment_value,
+                provider=references.provider,
+                certificate_ref=references.certificate_ref,
+                password_ref=references.password_ref,
+            )
+            self._apply_metadata(row, loaded)
+            row.status = FiscalCertificateStatus.PENDING_VALIDATION.value
+            row.is_active = False
+            db.session.flush()
+            return row
+        except IntegrityError as exc:
+            self.upload_store.delete(references)
+            raise FiscalCertificateError(
+                "Este certificado A1 já está cadastrado para o cliente."
+            ) from exc
+        except Exception:
+            self.upload_store.delete(references)
+            raise
+
     def validate(self, certificate_id, *, client_id) -> FiscalCertificate:
         row = self.get(certificate_id, client_id=client_id)
         try:
@@ -113,7 +179,7 @@ class FiscalCertificateRegistry:
         self._apply_metadata(row, loaded)
         row.status = FiscalCertificateStatus.PENDING_VALIDATION.value
         row.is_active = False
-        db.session.flush()
+        self._flush_certificate(row)
         return row
 
     def activate(self, certificate_id, *, client_id) -> FiscalCertificate:
@@ -136,7 +202,7 @@ class FiscalCertificateRegistry:
         row.status = FiscalCertificateStatus.ACTIVE.value
         row.is_active = True
         row.updated_at = now
-        db.session.flush()
+        self._flush_certificate(row)
         return row
 
     def get(self, certificate_id, *, client_id) -> FiscalCertificate:
@@ -213,6 +279,16 @@ class FiscalCertificateRegistry:
         row.last_validated_at = now
         row.validation_error = None
         row.updated_at = now
+
+    @staticmethod
+    def _flush_certificate(row: FiscalCertificate) -> None:
+        try:
+            db.session.flush()
+        except IntegrityError as exc:
+            db.session.rollback()
+            raise FiscalCertificateError(
+                "Este certificado A1 já está cadastrado para o cliente e ambiente."
+            ) from exc
 
     def _query(self):
         return FiscalCertificate.query.filter(

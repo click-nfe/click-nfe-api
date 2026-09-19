@@ -26,6 +26,23 @@
 
 ## Armazenamento
 
+### Desenvolvimento local
+
+O upload local usa `LocalEncryptedFileCertificateVault`. Certificado e senha
+são criptografados separadamente com Fernet, recebem nomes aleatórios e ficam no
+volume privado `click_nfe_certificate_data`. O PostgreSQL guarda apenas
+referências `local:`, fingerprint, titular e vigência.
+
+- nenhuma rota permite download;
+- o nome original do arquivo não é preservado;
+- referências são validadas para impedir path traversal;
+- arquivos temporários são substituídos atomicamente e usam permissão `0600`;
+- senha e PKCS#12 são validados antes da gravação;
+- falhas de cadastro removem os arquivos recém-criados;
+- o provider local não deve ser utilizado em produção.
+
+### Produção
+
 Preferência: certificado e senha como secrets distintos no Secret Manager,
 desde que o PKCS#12 esteja dentro do limite aceito pelo serviço.
 

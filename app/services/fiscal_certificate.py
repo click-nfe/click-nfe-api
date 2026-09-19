@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import os
 import re
+import tempfile
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Protocol
+from pathlib import Path
+from typing import Any, Mapping, Protocol
 
 from cryptography import x509
+from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.serialization import pkcs12
@@ -36,6 +41,13 @@ class LoadedA1Certificate:
     valid_until: datetime
 
 
+@dataclass(frozen=True)
+class StoredCertificateReferences:
+    provider: str
+    certificate_ref: str
+    password_ref: str
+
+
 class CertificateVault(Protocol):
     def resolve(
         self,
@@ -45,6 +57,202 @@ class CertificateVault(Protocol):
         password_ref: str,
     ) -> CertificateMaterial:
         ...
+
+
+class CertificateUploadStore(CertificateVault, Protocol):
+    provider: str
+
+    def store(
+        self,
+        *,
+        organization_id: str,
+        client_id: str,
+        material: CertificateMaterial,
+    ) -> StoredCertificateReferences:
+        ...
+
+    def delete(self, references: StoredCertificateReferences) -> None:
+        ...
+
+
+class LocalEncryptedFileCertificateVault:
+    """Cofre local de desenvolvimento com conteúdo criptografado em repouso."""
+
+    provider = "local_encrypted_file"
+    _REFERENCE = re.compile(
+        r"^local:([0-9a-f-]{36})/([0-9a-f-]{36})/"
+        r"([0-9a-f]{32})\.(pfx|password)\.enc$"
+    )
+
+    def __init__(
+        self,
+        *,
+        root_dir: str | Path | None = None,
+        encryption_key: str | bytes | None = None,
+        secret_key: str | None = None,
+    ) -> None:
+        self.root_dir = Path(
+            root_dir
+            or os.getenv(
+                "NFE_LOCAL_CERTIFICATE_DIR",
+                "/app/data/certificates",
+            )
+        ).resolve()
+        self._fernet = Fernet(
+            self._key(
+                encryption_key or os.getenv("NFE_LOCAL_CERTIFICATE_KEY"),
+                secret_key=secret_key or os.getenv("SECRET_KEY"),
+            )
+        )
+
+    def store(
+        self,
+        *,
+        organization_id: str,
+        client_id: str,
+        material: CertificateMaterial,
+    ) -> StoredCertificateReferences:
+        organization = self._uuid(organization_id, "organização")
+        client = self._uuid(client_id, "cliente")
+        token = uuid.uuid4().hex
+        certificate_ref = f"local:{organization}/{client}/{token}.pfx.enc"
+        password_ref = f"local:{organization}/{client}/{token}.password.enc"
+        references = StoredCertificateReferences(
+            provider=self.provider,
+            certificate_ref=certificate_ref,
+            password_ref=password_ref,
+        )
+        try:
+            self._write(certificate_ref, material.pkcs12_bytes)
+            self._write(password_ref, material.password)
+        except Exception:
+            self.delete(references)
+            raise
+        return references
+
+    def resolve(
+        self,
+        *,
+        provider: str,
+        certificate_ref: str,
+        password_ref: str,
+    ) -> CertificateMaterial:
+        if str(provider) not in {
+            self.provider,
+            "FiscalCredentialProvider.LOCAL_ENCRYPTED_FILE",
+        }:
+            raise FiscalCertificateError(
+                "O provider não corresponde ao cofre local do certificado."
+            )
+        return CertificateMaterial(
+            pkcs12_bytes=self._read(certificate_ref),
+            password=self._read(password_ref),
+        )
+
+    def delete(self, references: StoredCertificateReferences) -> None:
+        for reference in (
+            references.certificate_ref,
+            references.password_ref,
+        ):
+            try:
+                self._path(reference).unlink(missing_ok=True)
+            except OSError:
+                continue
+
+    def _write(self, reference: str, content: bytes) -> None:
+        if not content:
+            raise FiscalCertificateError(
+                "O conteúdo do certificado ou da senha está vazio."
+            )
+        path = self._path(reference)
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        encrypted = self._fernet.encrypt(content)
+        temporary_name = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                dir=path.parent,
+                prefix=".upload-",
+                delete=False,
+            ) as temporary:
+                temporary.write(encrypted)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+                temporary_name = temporary.name
+            os.chmod(temporary_name, 0o600)
+            os.replace(temporary_name, path)
+        finally:
+            if temporary_name:
+                Path(temporary_name).unlink(missing_ok=True)
+
+    def _read(self, reference: str) -> bytes:
+        try:
+            encrypted = self._path(reference).read_bytes()
+            return self._fernet.decrypt(encrypted)
+        except FileNotFoundError as exc:
+            raise FiscalCertificateError(
+                "O material local do certificado A1 não foi encontrado."
+            ) from exc
+        except InvalidToken as exc:
+            raise FiscalCertificateError(
+                "O material local do certificado A1 não pôde ser descriptografado."
+            ) from exc
+        except OSError as exc:
+            raise FiscalCertificateError(
+                "Não foi possível ler o material local do certificado A1."
+            ) from exc
+
+    def _path(self, reference: str) -> Path:
+        match = self._REFERENCE.fullmatch(str(reference or ""))
+        if not match:
+            raise FiscalCertificateError(
+                "A referência local do certificado A1 é inválida."
+            )
+        relative = Path(*match.groups()[:3]).with_suffix(
+            f".{match.group(4)}.enc"
+        )
+        path = (self.root_dir / relative).resolve()
+        if not path.is_relative_to(self.root_dir):
+            raise FiscalCertificateError(
+                "A referência local do certificado A1 é inválida."
+            )
+        return path
+
+    @staticmethod
+    def _key(
+        configured: str | bytes | None,
+        *,
+        secret_key: str | None,
+    ) -> bytes:
+        if configured:
+            value = (
+                configured.encode("ascii")
+                if isinstance(configured, str)
+                else configured
+            )
+            try:
+                Fernet(value)
+            except (ValueError, TypeError) as exc:
+                raise FiscalCertificateError(
+                    "NFE_LOCAL_CERTIFICATE_KEY não contém uma chave Fernet válida."
+                ) from exc
+            return value
+        if not secret_key:
+            raise FiscalCertificateError(
+                "NFE_LOCAL_CERTIFICATE_KEY ou SECRET_KEY é obrigatória para o cofre local."
+            )
+        digest = hashlib.sha256(
+            f"click-nfe-local-certificates:{secret_key}".encode("utf-8")
+        ).digest()
+        return base64.urlsafe_b64encode(digest)
+
+    @staticmethod
+    def _uuid(value: str, label: str) -> str:
+        try:
+            return str(uuid.UUID(str(value)))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise FiscalCertificateError(
+                f"O identificador de {label} é inválido."
+            ) from exc
 
 
 class EnvironmentCertificateVault:
@@ -213,6 +421,7 @@ class DefaultCertificateVault:
         *,
         environment_vault: CertificateVault | None = None,
         gcp_vault: CertificateVault | None = None,
+        local_vault: CertificateVault | None = None,
     ) -> None:
         self.environment_vault = (
             environment_vault or EnvironmentCertificateVault()
@@ -220,6 +429,7 @@ class DefaultCertificateVault:
         self.gcp_vault = (
             gcp_vault or GcpSecretManagerCertificateVault()
         )
+        self.local_vault = local_vault
 
     def resolve(
         self,
@@ -228,12 +438,24 @@ class DefaultCertificateVault:
         certificate_ref: str,
         password_ref: str,
     ) -> CertificateMaterial:
-        if str(provider) not in {
+        provider_value = str(provider)
+        if provider_value not in {
+            "local_encrypted_file",
+            "FiscalCredentialProvider.LOCAL_ENCRYPTED_FILE",
             "gcp_secret_manager",
             "FiscalCredentialProvider.GCP_SECRET_MANAGER",
         }:
             raise FiscalCertificateError(
                 "O provider do certificado ainda não é suportado para assinatura."
+            )
+        if certificate_ref.startswith("local:") and password_ref.startswith(
+            "local:"
+        ):
+            local_vault = self.local_vault or LocalEncryptedFileCertificateVault()
+            return local_vault.resolve(
+                provider=provider_value,
+                certificate_ref=certificate_ref,
+                password_ref=password_ref,
             )
         if certificate_ref.startswith("env:") and password_ref.startswith(
             "env:"
@@ -252,8 +474,25 @@ class DefaultCertificateVault:
                 password_ref=password_ref,
             )
         raise FiscalCertificateError(
-            "Certificado e senha devem usar o mesmo provider env: ou gcp:."
+            "Certificado e senha devem usar o mesmo provider local:, env: ou gcp:."
         )
+
+
+def certificate_vault_from_config(config: Mapping[str, Any]) -> CertificateVault:
+    """Monta o mesmo cofre para cadastro, validação e assinatura."""
+
+    configured = config.get("NFE_CERTIFICATE_VAULT")
+    if configured is not None:
+        return configured
+    local_vault = LocalEncryptedFileCertificateVault(
+        root_dir=config.get(
+            "NFE_LOCAL_CERTIFICATE_DIR",
+            "/app/data/certificates",
+        ),
+        encryption_key=config.get("NFE_LOCAL_CERTIFICATE_KEY"),
+        secret_key=config.get("SECRET_KEY"),
+    )
+    return DefaultCertificateVault(local_vault=local_vault)
 
 
 class A1CertificateInspector:

@@ -16,8 +16,8 @@ from ..schemas.import_process import (
 )
 from ..schemas.fiscal_certificate import SignNfeXmlSchema
 from ..services.fiscal_certificate import (
-    DefaultCertificateVault,
     FiscalCertificateError,
+    certificate_vault_from_config,
 )
 from ..services.import_process import ImportNfeService
 from ..services.nfe_xml_signer import NfeXmlSignatureError, NfeXmlSigner
@@ -46,10 +46,7 @@ def _service() -> ImportNfeService:
         xsd_validator=NfeXsdValidator(
             schema_path=current_app.config.get("NFE_XSD_PATH")
         ),
-        certificate_vault=(
-            current_app.config.get("NFE_CERTIFICATE_VAULT")
-            or DefaultCertificateVault()
-        ),
+        certificate_vault=certificate_vault_from_config(current_app.config),
         xml_signer=(
             current_app.config.get("NFE_XML_SIGNER")
             or NfeXmlSigner()

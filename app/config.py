@@ -73,6 +73,18 @@ class Config:
     CEP_CACHE_TTL_SECONDS = int(
         os.getenv("CEP_CACHE_TTL_SECONDS", "2592000")
     )
+    NFE_CERTIFICATE_STORAGE_PROVIDER = os.getenv(
+        "NFE_CERTIFICATE_STORAGE_PROVIDER",
+        "local_encrypted_file",
+    )
+    NFE_LOCAL_CERTIFICATE_DIR = os.getenv(
+        "NFE_LOCAL_CERTIFICATE_DIR",
+        "/app/data/certificates",
+    )
+    NFE_LOCAL_CERTIFICATE_KEY = os.getenv("NFE_LOCAL_CERTIFICATE_KEY")
+    NFE_CERTIFICATE_MAX_BYTES = int(
+        os.getenv("NFE_CERTIFICATE_MAX_BYTES", str(2 * 1024 * 1024))
+    )
     NFE_XSD_PATH = os.getenv(
         "NFE_XSD_PATH",
         str(DEFAULT_NFE_XSD_PATH),

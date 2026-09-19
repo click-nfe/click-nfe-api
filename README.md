@@ -213,6 +213,10 @@ preservados.
 | `VIA_CEP_BASE_URL` | Provedor primário usado na consulta pontual de CEP | `https://viacep.com.br` |
 | `CEP_LOOKUP_TIMEOUT_SECONDS` | Limite individual por provedor de CEP | `4` |
 | `CEP_CACHE_TTL_SECONDS` | Validade do endereço em cache antes de nova consulta | `2592000` |
+| `NFE_CERTIFICATE_STORAGE_PROVIDER` | Destino dos novos uploads A1 | `local_encrypted_file` |
+| `NFE_LOCAL_CERTIFICATE_DIR` | Diretório do cofre local criptografado | `/app/data/certificates` |
+| `NFE_LOCAL_CERTIFICATE_KEY` | Chave Fernet exclusiva do cofre local | derivada de `SECRET_KEY` no desenvolvimento |
+| `NFE_CERTIFICATE_MAX_BYTES` | Tamanho máximo do arquivo `.pfx`/`.p12` | `2097152` |
 | `NFE_XSD_PATH` | Caminho alternativo para o XSD da NF-e | schema incluído na aplicação |
 | `DEV_ADMIN_*` | Valores opcionais para o bootstrap administrativo local | consultar `.env.example` |
 | `WEB_CONCURRENCY` | Processos Gunicorn | `2` |
@@ -230,6 +234,43 @@ o ViaCEP e usa a BrasilAPI como alternativa. O endereço normalizado, inclusive 
 código IBGE do município e o código BACEN do Brasil, é armazenado no PostgreSQL.
 O cache reduz chamadas externas e um registro expirado pode ser utilizado como
 fallback somente quando todos os provedores estiverem indisponíveis.
+
+### Certificado eCNPJ A1 no ambiente local
+
+A rota autenticada de administrador
+
+`POST /clients/<client_id>/fiscal-certificates/upload`
+
+recebe `multipart/form-data` com `certificate`, `password` e `environment`.
+São aceitos arquivos `.pfx` e `.p12` de até 2 MB. Antes da persistência, a API:
+
+1. abre o PKCS#12 com a senha informada;
+2. confirma a presença de chave privada RSA e permissão de assinatura;
+3. confere a validade e o CNPJ contra o perfil fiscal padrão do cliente;
+4. rejeita certificados duplicados pelo fingerprint SHA-256;
+5. criptografa certificado e senha separadamente no cofre local;
+6. grava no PostgreSQL somente referências e metadados não secretos.
+
+O volume Docker `click_nfe_certificate_data` preserva os arquivos criptografados
+entre recriações do container. Ele não deve ser versionado nem disponibilizado
+por servidor web. A senha nunca é incluída em resposta ou log.
+
+Por padrão, a chave do cofre local é derivada da `SECRET_KEY`. Para desacoplar
+as chaves, gere uma Fernet e mantenha seu valor estável no `.env`:
+
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+```dotenv
+NFE_LOCAL_CERTIFICATE_KEY=valor-gerado
+```
+
+Se essa chave for perdida ou alterada, os certificados locais existentes não
+poderão ser descriptografados. Em produção, novos uploads deverão usar uma
+implementação de `CertificateUploadStore` para o Google Secret Manager. O
+contrato do frontend e o cadastro fiscal permanecem os mesmos; apenas o provider
+e as referências internas mudam para `gcp:NOME@VERSAO`.
 
 ## Preparação para produção
 

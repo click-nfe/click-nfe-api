@@ -24,6 +24,7 @@ from ..extensions import Base
 
 
 class FiscalCredentialProvider(str, Enum):
+    LOCAL_ENCRYPTED_FILE = "local_encrypted_file"
     GCP_SECRET_MANAGER = "gcp_secret_manager"
     GCP_CLOUD_STORAGE = "gcp_cloud_storage"
 
@@ -118,6 +119,13 @@ class FiscalCertificate(Base):
             "organization_id",
             "certificate_ref",
             name="uq_fiscal_certificate_org_ref",
+        ),
+        UniqueConstraint(
+            "organization_id",
+            "client_id",
+            "environment",
+            "certificate_fingerprint_sha256",
+            name="uq_fiscal_certificate_client_fingerprint",
         ),
     )
 
