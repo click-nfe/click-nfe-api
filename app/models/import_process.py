@@ -333,6 +333,7 @@ class NfeItemClassification(Base):
         nullable=True,
         index=True,
     )
+    tax_rule_snapshot = Column(JSON, nullable=True)
     cfop = Column(String(4), nullable=True)
     source = Column(String(20), nullable=False, default="manual")
     classified_by_user_id = Column(
@@ -655,6 +656,7 @@ class NfeDraftItem(Base):
         nullable=True,
         index=True,
     )
+    tax_rule_snapshot = Column(JSON, nullable=True)
     item_classification_id = Column(
         UUID(as_uuid=True),
         ForeignKey("nfe_item_classifications.id"),
