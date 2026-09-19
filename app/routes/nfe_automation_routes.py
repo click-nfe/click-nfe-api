@@ -9,6 +9,7 @@ from ..schemas.nfe_automation import (
     NfeContextQuerySchema,
     NfeItemClassificationQuerySchema,
     ResolveNfeContextSchema,
+    SimulateClientImportTaxRuleSchema,
     UpdateClientImportTaxRuleSchema,
 )
 from ..services.import_process import (
@@ -70,6 +71,29 @@ def import_tax_rule_diagnostics(client_id: str):
                 "summary": result["summary"],
             }
         )
+    except ValueError as exc:
+        return bad_request_response(exc)
+
+
+@client_import_tax_rule_bp.post("/<client_id>/import-tax-rules/simulate")
+@auth_required
+def simulate_import_tax_rule(client_id: str):
+    client_uuid = uuid_or_404(client_id)
+    try:
+        payload = SimulateClientImportTaxRuleSchema().load(json_payload())
+        return jsonify(
+            _service().simulate_import_tax_rule(client_uuid, payload)
+        )
+    except ValidationError as exc:
+        return validation_error_response(exc)
+    except ImportTaxRuleConflictError as exc:
+        return jsonify(
+            {
+                "error": "tax_rule_conflict",
+                "message": str(exc),
+                "conflicts": exc.conflicts,
+            }
+        ), 409
     except ValueError as exc:
         return bad_request_response(exc)
 

@@ -44,10 +44,21 @@ class ClientImportTaxRuleSchema(Schema):
         allow_none=True,
         validate=validate.Regexp(r"^[0-9]{2,8}$"),
     )
+    ncm_scope_type = fields.String(
+        load_default=None,
+        allow_none=True,
+        validate=validate.OneOf(["all", "prefix", "exact"]),
+    )
+    ncm_patterns = fields.List(
+        fields.String(validate=validate.Regexp(r"^[0-9]{2,8}$")),
+        load_default=None,
+        allow_none=True,
+    )
     priority = fields.Integer(
         load_default=0,
         validate=validate.Range(min=0, max=1000000),
     )
+    revision = fields.Integer(dump_only=True)
     configuration_json = fields.Dict(required=True)
     additional_cost_defaults = fields.Dict(load_default=None, allow_none=True)
     transport_defaults = fields.Dict(load_default=None, allow_none=True)
@@ -61,6 +72,7 @@ class ClientImportTaxRuleSchema(Schema):
 
     @validates_schema
     def validate_rule(self, data, **kwargs):
+        self._normalize_ncm_scope(data)
         start = data.get("effective_from")
         end = data.get("effective_until")
         if start and end and end < start:
@@ -188,12 +200,95 @@ class ClientImportTaxRuleSchema(Schema):
                 field_name="configuration_json",
             )
 
+    @staticmethod
+    def _normalize_ncm_scope(data):
+        scope_fields = {"ncm_scope_type", "ncm_patterns", "ncm_pattern"}
+        if not scope_fields.intersection(data):
+            return
+
+        legacy_pattern = data.get("ncm_pattern")
+        patterns = data.get("ncm_patterns")
+        if patterns is None:
+            patterns = [legacy_pattern] if legacy_pattern else []
+        patterns = sorted({str(pattern) for pattern in patterns})
+
+        scope_type = data.get("ncm_scope_type")
+        if scope_type is None:
+            if not patterns:
+                scope_type = "all"
+            elif all(len(pattern) == 8 for pattern in patterns):
+                scope_type = "exact"
+            else:
+                scope_type = "prefix"
+
+        if scope_type == "all":
+            if patterns:
+                raise ValidationError(
+                    "Regras para todos os NCMs não aceitam ncm_patterns.",
+                    field_name="ncm_patterns",
+                )
+        elif not patterns:
+            raise ValidationError(
+                "Informe ao menos um NCM para o escopo selecionado.",
+                field_name="ncm_patterns",
+            )
+        elif scope_type == "exact" and any(
+            len(pattern) != 8 for pattern in patterns
+        ):
+            raise ValidationError(
+                "O escopo exact aceita somente NCMs completos com 8 dígitos.",
+                field_name="ncm_patterns",
+            )
+        elif scope_type == "prefix" and any(
+            not 2 <= len(pattern) <= 7 for pattern in patterns
+        ):
+            raise ValidationError(
+                "O escopo prefix aceita prefixos de NCM com 2 a 7 dígitos.",
+                field_name="ncm_patterns",
+            )
+
+        if legacy_pattern and patterns != [legacy_pattern]:
+            raise ValidationError(
+                "ncm_pattern deve representar o mesmo escopo de ncm_patterns.",
+                field_name="ncm_pattern",
+            )
+
+        data["ncm_scope_type"] = scope_type
+        data["ncm_patterns"] = patterns
+        data["ncm_pattern"] = patterns[0] if len(patterns) == 1 else None
+
 
 class UpdateClientImportTaxRuleSchema(ClientImportTaxRuleSchema):
     name = fields.String(validate=validate.Length(min=1, max=120))
     issuer_state = fields.String(validate=validate.Regexp(r"^[A-Z]{2}$"))
     import_purpose = fields.String(validate=validate.OneOf(ImportPurpose.values()))
     configuration_json = fields.Dict()
+
+
+class SimulateClientImportTaxRuleSchema(Schema):
+    issuer_state = fields.String(
+        required=True,
+        validate=validate.Regexp(r"^[A-Z]{2}$"),
+    )
+    tax_regime = fields.String(
+        required=True,
+        validate=validate.OneOf(["1", "2", "3"]),
+    )
+    import_purpose = fields.String(
+        required=True,
+        validate=validate.OneOf(ImportPurpose.values()),
+    )
+    import_modality = fields.String(
+        load_default=None,
+        allow_none=True,
+        validate=validate.OneOf(["direct", "on_behalf", "by_order"]),
+    )
+    ncm = fields.String(
+        required=True,
+        validate=validate.Regexp(r"^[0-9]{8}$"),
+    )
+    reference_date = fields.Date(load_default=None, allow_none=True)
+    tax_rule_id = fields.UUID(load_default=None, allow_none=True)
 
 
 class NfeContextQuerySchema(Schema):

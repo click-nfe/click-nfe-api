@@ -1214,6 +1214,22 @@ class ImportNfeService:
         rule: ClientImportTaxRule,
         payload: dict[str, Any],
     ) -> ClientImportTaxRule:
+        revision_fields = {
+            "issuer_state",
+            "import_purpose",
+            "import_modality",
+            "tax_regime",
+            "ncm_pattern",
+            "ncm_scope_type",
+            "ncm_patterns",
+            "priority",
+            "configuration_json",
+            "additional_cost_defaults",
+            "transport_defaults",
+            "payment_defaults",
+            "effective_from",
+            "effective_until",
+        }
         for field in (
             "name",
             "issuer_state",
@@ -1221,6 +1237,8 @@ class ImportNfeService:
             "import_modality",
             "tax_regime",
             "ncm_pattern",
+            "ncm_scope_type",
+            "ncm_patterns",
             "priority",
             "configuration_json",
             "additional_cost_defaults",
@@ -1232,6 +1250,8 @@ class ImportNfeService:
         ):
             if field in payload:
                 setattr(rule, field, payload[field])
+        if revision_fields.intersection(payload):
+            rule.revision = (rule.revision or 1) + 1
         rule.updated_at = datetime.utcnow()
         self._validate_import_tax_rule(rule)
         conflicts = self._find_import_tax_rule_conflicts(rule)
@@ -1302,10 +1322,41 @@ class ImportNfeService:
         tax_regime: str,
         import_purpose: str,
         import_modality: str | None,
-        ncms: list[str],
-        reference_date: date | None,
+        ncm: str | None = None,
+        ncms: list[str] | None = None,
+        reference_date: date | None = None,
         rule_id=None,
     ) -> ClientImportTaxRule | None:
+        resolved_ncm = self._single_ncm(ncm=ncm, ncms=ncms)
+        result = self.resolve_import_tax_rule(
+            client_id=client_id,
+            issuer_state=issuer_state,
+            tax_regime=tax_regime,
+            import_purpose=import_purpose,
+            import_modality=import_modality,
+            ncm=resolved_ncm,
+            reference_date=reference_date,
+            rule_id=rule_id,
+        )
+        return result["rule"]
+
+    def resolve_import_tax_rule(
+        self,
+        *,
+        client_id,
+        issuer_state: str,
+        tax_regime: str,
+        import_purpose: str,
+        import_modality: str | None,
+        ncm: str,
+        reference_date: date | None,
+        rule_id=None,
+    ) -> dict[str, Any]:
+        self.get_client_for_current_user(client_id)
+        normalized_ncm = self._digits(ncm)
+        if len(normalized_ncm) != 8:
+            raise ValueError("O NCM deve conter exatamente 8 dígitos.")
+
         query = self.import_tax_rule_query_for_current_user().filter(
             ClientImportTaxRule.client_id == client_id,
             ClientImportTaxRule.active.is_(True),
@@ -1313,7 +1364,7 @@ class ImportNfeService:
         if rule_id:
             query = query.filter(ClientImportTaxRule.id == rule_id)
 
-        matches: list[ClientImportTaxRule] = []
+        candidates = []
         for rule in query.all():
             reasons = self._tax_rule_mismatch_reasons(
                 rule,
@@ -1321,32 +1372,123 @@ class ImportNfeService:
                 tax_regime=tax_regime,
                 import_purpose=import_purpose,
                 import_modality=import_modality,
-                ncms=ncms,
+                ncm=normalized_ncm,
                 reference_date=reference_date,
             )
-            if not reasons:
-                matches.append(rule)
+            score = (
+                self._tax_rule_score(rule, normalized_ncm)
+                if not reasons
+                else None
+            )
+            candidates.append(
+                {
+                    "rule": rule,
+                    "mismatch_reasons": reasons,
+                    "score": score,
+                    "matched_ncm_pattern": self._matching_ncm_pattern(
+                        rule,
+                        normalized_ncm,
+                    ),
+                }
+            )
+        matches = [candidate for candidate in candidates if not candidate["mismatch_reasons"]]
 
-        matches.sort(key=self._tax_rule_score, reverse=True)
+        matches.sort(key=lambda candidate: candidate["score"], reverse=True)
         if rule_id and not matches:
             raise ValueError(
                 "A regra fiscal informada não é aplicável ao cliente, UF, "
-                "finalidade, modalidade, NCMs ou período da DUIMP."
+                "finalidade, modalidade, NCM ou período da DUIMP."
             )
         if (
             len(matches) > 1
-            and self._tax_rule_score(matches[0])
-            == self._tax_rule_score(matches[1])
+            and not rule_id
+            and matches[0]["score"] == matches[1]["score"]
         ):
-            top_score = self._tax_rule_score(matches[0])
+            top_score = matches[0]["score"]
             raise ImportTaxRuleConflictError(
                 [
-                    self._tax_rule_conflict_summary(rule)
-                    for rule in matches
-                    if self._tax_rule_score(rule) == top_score
+                    self._tax_rule_conflict_summary(candidate["rule"])
+                    for candidate in matches
+                    if candidate["score"] == top_score
                 ]
             )
-        return matches[0] if matches else None
+        selected = matches[0] if matches else None
+        return {
+            "rule": selected["rule"] if selected else None,
+            "selection": {
+                "ncm": normalized_ncm,
+                "matched_ncm_pattern": (
+                    selected["matched_ncm_pattern"] if selected else None
+                ),
+                "score": list(selected["score"]) if selected else None,
+                "explicit_rule": bool(rule_id),
+            },
+            "candidates": [
+                {
+                    "rule": self._tax_rule_to_dict(candidate["rule"]),
+                    "mismatch_reasons": candidate["mismatch_reasons"],
+                    "score": (
+                        list(candidate["score"])
+                        if candidate["score"] is not None
+                        else None
+                    ),
+                    "matched_ncm_pattern": candidate["matched_ncm_pattern"],
+                    "selected": bool(
+                        selected
+                        and candidate["rule"].id == selected["rule"].id
+                    ),
+                }
+                for candidate in sorted(
+                    candidates,
+                    key=lambda candidate: (
+                        candidate["score"] is not None,
+                        candidate["score"] or (-1, -1, False, False),
+                        candidate["rule"].name,
+                    ),
+                    reverse=True,
+                )
+            ],
+        }
+
+    def simulate_import_tax_rule(
+        self,
+        client_id,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        result = self.resolve_import_tax_rule(
+            client_id=client_id,
+            issuer_state=payload["issuer_state"],
+            tax_regime=payload["tax_regime"],
+            import_purpose=payload["import_purpose"],
+            import_modality=payload.get("import_modality"),
+            ncm=payload["ncm"],
+            reference_date=payload.get("reference_date"),
+            rule_id=payload.get("tax_rule_id"),
+        )
+        rule = result.pop("rule")
+        return {
+            "status": "matched" if rule else "no_match",
+            "selected_rule": self._tax_rule_to_dict(rule) if rule else None,
+            **result,
+        }
+
+    @classmethod
+    def _single_ncm(
+        cls,
+        *,
+        ncm: str | None,
+        ncms: list[str] | None,
+    ) -> str:
+        values = [cls._digits(value) for value in (ncms or []) if value]
+        if ncm:
+            values.insert(0, cls._digits(ncm))
+        unique = list(dict.fromkeys(values))
+        if len(unique) != 1:
+            raise ValueError(
+                "A regra tributária deve ser resolvida individualmente para "
+                "cada item da DUIMP."
+            )
+        return unique[0]
 
     def _find_import_tax_rule_conflicts(
         self,
@@ -1372,7 +1514,11 @@ class ImportNfeService:
         first: ClientImportTaxRule,
         second: ClientImportTaxRule,
     ) -> bool:
-        if cls._tax_rule_score(first) != cls._tax_rule_score(second):
+        if first.priority != second.priority:
+            return False
+        if bool(first.import_modality) != bool(second.import_modality):
+            return False
+        if bool(first.tax_regime) != bool(second.tax_regime):
             return False
         if first.issuer_state != second.issuer_state:
             return False
@@ -1385,12 +1531,7 @@ class ImportNfeService:
             return False
         if not cls._optional_scope_overlaps(first.tax_regime, second.tax_regime):
             return False
-        first_ncm = cls._digits(first.ncm_pattern)
-        second_ncm = cls._digits(second.ncm_pattern)
-        if first_ncm and second_ncm and not (
-            first_ncm.startswith(second_ncm)
-            or second_ncm.startswith(first_ncm)
-        ):
+        if not cls._ncm_scopes_tie(first, second):
             return False
         if (
             first.effective_until
@@ -1414,10 +1555,18 @@ class ImportNfeService:
     def _tax_rule_score(
         cls,
         rule: ClientImportTaxRule,
+        ncm: str | None = None,
     ) -> tuple[int, int, bool, bool]:
+        if ncm:
+            specificity = len(cls._matching_ncm_pattern(rule, ncm) or "")
+        else:
+            specificity = max(
+                (len(pattern) for pattern in cls._rule_ncm_patterns(rule)),
+                default=0,
+            )
         return (
+            specificity,
             rule.priority,
-            len(cls._digits(rule.ncm_pattern)),
             bool(rule.import_modality),
             bool(rule.tax_regime),
         )
@@ -1449,7 +1598,7 @@ class ImportNfeService:
         tax_regime: str,
         import_purpose: str,
         import_modality: str | None,
-        ncms: list[str],
+        ncm: str,
         reference_date: date | None,
     ) -> list[str]:
         reasons: list[str] = []
@@ -1466,13 +1615,61 @@ class ImportNfeService:
                 reasons.append("effective_from")
             if rule.effective_until and reference_date > rule.effective_until:
                 reasons.append("effective_until")
-        pattern = self._digits(rule.ncm_pattern)
-        if pattern and (
-            not ncms
-            or not all(ncm.startswith(pattern) for ncm in ncms)
-        ):
+        if self._matching_ncm_pattern(rule, ncm) is None:
             reasons.append("ncm_pattern")
         return reasons
+
+    @classmethod
+    def _rule_ncm_scope_type(cls, rule: ClientImportTaxRule) -> str:
+        explicit = str(rule.ncm_scope_type or "").strip()
+        if explicit in {"all", "prefix", "exact"}:
+            return explicit
+        legacy = cls._digits(rule.ncm_pattern)
+        if not legacy:
+            return "all"
+        return "exact" if len(legacy) == 8 else "prefix"
+
+    @classmethod
+    def _rule_ncm_patterns(cls, rule: ClientImportTaxRule) -> list[str]:
+        configured = rule.ncm_patterns
+        if isinstance(configured, list):
+            patterns = [cls._digits(value) for value in configured]
+            patterns = [value for value in patterns if value]
+            if patterns:
+                return sorted(set(patterns))
+        legacy = cls._digits(rule.ncm_pattern)
+        return [legacy] if legacy else []
+
+    @classmethod
+    def _matching_ncm_pattern(
+        cls,
+        rule: ClientImportTaxRule,
+        ncm: str,
+    ) -> str | None:
+        normalized_ncm = cls._digits(ncm)
+        patterns = cls._rule_ncm_patterns(rule)
+        if not patterns:
+            return ""
+        matches = [
+            pattern
+            for pattern in patterns
+            if normalized_ncm.startswith(pattern)
+        ]
+        return max(matches, key=len) if matches else None
+
+    @classmethod
+    def _ncm_scopes_tie(
+        cls,
+        first: ClientImportTaxRule,
+        second: ClientImportTaxRule,
+    ) -> bool:
+        first_patterns = cls._rule_ncm_patterns(first) or [""]
+        second_patterns = cls._rule_ncm_patterns(second) or [""]
+        return any(
+            first_pattern == second_pattern
+            for first_pattern in first_patterns
+            for second_pattern in second_patterns
+        )
 
     @staticmethod
     def _validate_import_tax_rule(rule: ClientImportTaxRule) -> None:
@@ -1777,34 +1974,46 @@ class ImportNfeService:
         )
         fiscal_profile = self.get_importer_fiscal_profile_or_none(process.importer_id)
         rule = None
+        resolved_rules: list[ClientImportTaxRule] = []
+        has_missing_item_rule = False
         import_purpose = payload.get("import_purpose")
         if fiscal_profile and import_purpose:
-            rule = self.match_import_tax_rule(
-                client_id=process.importer_id,
-                issuer_state=fiscal_profile.state,
-                tax_regime=fiscal_profile.tax_regime,
-                import_purpose=import_purpose,
-                import_modality=context["normalized"].get("import_modality"),
-                ncms=[
-                    self._digits(item.get("ncm"))
-                    for item in context["normalized"].get("items", [])
-                    if item.get("ncm")
-                ],
-                reference_date=self._date_value(
-                    context["normalized"].get("registration_date")
-                ),
-            )
+            rules_by_id = {}
+            for item in context["normalized"].get("items", []):
+                item_rule = self.match_import_tax_rule(
+                    client_id=process.importer_id,
+                    issuer_state=fiscal_profile.state,
+                    tax_regime=fiscal_profile.tax_regime,
+                    import_purpose=import_purpose,
+                    import_modality=context["normalized"].get(
+                        "import_modality"
+                    ),
+                    ncm=self._digits(item.get("ncm")),
+                    reference_date=self._date_value(
+                        context["normalized"].get("registration_date")
+                    ),
+                )
+                if item_rule is None:
+                    has_missing_item_rule = True
+                    continue
+                rules_by_id[item_rule.id] = item_rule
+            resolved_rules = list(rules_by_id.values())
+            rule = resolved_rules[0] if len(resolved_rules) == 1 else None
 
         missing = list(context["missing_fields"])
         if fiscal_profile is None:
             missing.append("client.fiscal_profile")
-        if import_purpose and rule is None:
+        if import_purpose and (has_missing_item_rule or not resolved_rules):
             missing.append("tax_configuration")
         context.update(
             {
                 "process_id": str(process.id),
                 "snapshot_id": str(snapshot.id),
                 "tax_rule": self._tax_rule_to_dict(rule) if rule else None,
+                "tax_rules": [
+                    self._tax_rule_to_dict(item_rule)
+                    for item_rule in resolved_rules
+                ],
                 "missing_fields": missing,
                 "ready_for_draft": not missing,
             }
@@ -1957,6 +2166,12 @@ class ImportNfeService:
             purpose = row.import_purpose if row else None
             rule = row.tax_rule if row else None
             rule_active = bool(rule and rule.active)
+            applied_revision = (
+                (row.tax_rule_snapshot or {}).get("revision")
+                if row
+                else None
+            )
+            current_revision = (rule.revision or 1) if rule else None
             if row and row.updated_at and (
                 latest_updated_at is None
                 or row.updated_at > latest_updated_at
@@ -1971,6 +2186,8 @@ class ImportNfeService:
                 status = "missing_tax_rule"
             elif not rule_active:
                 status = "inactive_tax_rule"
+            elif applied_revision and applied_revision != current_revision:
+                status = "stale_tax_rule"
             elif not row.cfop:
                 status = "missing_cfop"
             else:
@@ -1987,7 +2204,7 @@ class ImportNfeService:
                 and status != "classified"
                 and profile is not None
             ):
-                item_ncms = [self._digits(source.get("ncm"))]
+                item_ncm = self._digits(source.get("ncm"))
                 for candidate in active_rules:
                     if candidate.import_purpose != purpose:
                         continue
@@ -1997,7 +2214,7 @@ class ImportNfeService:
                         tax_regime=profile.tax_regime,
                         import_purpose=purpose,
                         import_modality=normalized.get("import_modality"),
-                        ncms=item_ncms,
+                        ncm=item_ncm,
                         reference_date=registration_date,
                     )
                     rule_candidates.append(
@@ -2009,6 +2226,10 @@ class ImportNfeService:
                             "tax_regime": candidate.tax_regime,
                             "import_modality": candidate.import_modality,
                             "ncm_pattern": candidate.ncm_pattern,
+                            "ncm_scope_type": self._rule_ncm_scope_type(
+                                candidate
+                            ),
+                            "ncm_patterns": self._rule_ncm_patterns(candidate),
                             "effective_from": (
                                 candidate.effective_from.isoformat()
                                 if candidate.effective_from
@@ -2057,6 +2278,8 @@ class ImportNfeService:
                             "id": str(rule.id),
                             "name": rule.name,
                             "active": rule.active,
+                            "revision": current_revision,
+                            "applied_revision": applied_revision,
                         }
                         if rule
                         else None
@@ -2125,18 +2348,19 @@ class ImportNfeService:
                     f"Item {item_number} não pertence ao snapshot informado."
                 )
             purpose = requested["import_purpose"]
-            rule = self.match_import_tax_rule(
+            resolution = self.resolve_import_tax_rule(
                 client_id=process.importer_id,
                 issuer_state=profile.state,
                 tax_regime=profile.tax_regime,
                 import_purpose=purpose,
                 import_modality=normalized.get("import_modality"),
-                ncms=[self._digits(source.get("ncm"))],
+                ncm=self._digits(source.get("ncm")),
                 reference_date=self._date_value(
                     normalized.get("registration_date")
                 ),
                 rule_id=requested.get("tax_rule_id"),
             )
+            rule = resolution["rule"]
             configuration = dict(rule.configuration_json or {}) if rule else {}
             configured_cfop = self._digits(configuration.get("cfop"))
             cfop = (
@@ -2166,6 +2390,15 @@ class ImportNfeService:
                 db.session.add(row)
             row.import_purpose = purpose
             row.tax_rule_id = rule.id if rule else None
+            row.tax_rule_snapshot = (
+                self._tax_rule_snapshot(
+                    rule,
+                    ncm=self._digits(source.get("ncm")),
+                    selection=resolution["selection"],
+                )
+                if rule
+                else None
+            )
             row.cfop = cfop
             row.source = "manual"
             row.classified_by_user_id = self.user_id
@@ -3009,26 +3242,65 @@ class ImportNfeService:
             payload["import_purpose"] = (
                 payload.get("import_purpose") or ImportPurpose.RESALE.value
             )
-            tax_rule = self.match_import_tax_rule(
-                client_id=process.importer_id,
-                issuer_state=fiscal_profile.state,
-                tax_regime=fiscal_profile.tax_regime,
-                import_purpose=payload["import_purpose"],
-                import_modality=normalized.get("import_modality"),
-                ncms=[
-                    self._digits(item.get("ncm"))
-                    for item in normalized.get("items", [])
-                    if item.get("ncm")
-                ],
-                reference_date=self._date_value(normalized.get("registration_date")),
-                rule_id=payload.get("tax_rule_id"),
-            )
-            if tax_rule is None:
-                raise ValueError(
-                    "Nenhuma regra fiscal aplicável foi encontrada. Cadastre uma "
-                    "regra para o cliente ou informe tax_configuration explicitamente."
+            missing_rules = []
+            for source_item in normalized.get("items", []):
+                item_number = str(source_item.get("number") or "")
+                item_ncm = self._digits(source_item.get("ncm"))
+                resolution = self.resolve_import_tax_rule(
+                    client_id=process.importer_id,
+                    issuer_state=fiscal_profile.state,
+                    tax_regime=fiscal_profile.tax_regime,
+                    import_purpose=payload["import_purpose"],
+                    import_modality=normalized.get("import_modality"),
+                    ncm=item_ncm,
+                    reference_date=self._date_value(
+                        normalized.get("registration_date")
+                    ),
+                    rule_id=payload.get("tax_rule_id"),
                 )
-            tax_rules = [tax_rule]
+                resolved_rule = resolution["rule"]
+                if resolved_rule is None:
+                    missing_rules.append(
+                        {"duimp_item_number": item_number, "ncm": item_ncm}
+                    )
+                    continue
+                configuration = resolved_rule.configuration_json or {}
+                configured_cfop = self._digits(configuration.get("cfop"))
+                classification = NfeItemClassification(
+                    import_purpose=payload["import_purpose"],
+                    tax_rule_id=resolved_rule.id,
+                    cfop=(
+                        configured_cfop
+                        if len(configured_cfop) == 4
+                        else self._resolve_cfop(payload["import_purpose"])
+                    ),
+                    source="automatic",
+                    tax_rule_snapshot=self._tax_rule_snapshot(
+                        resolved_rule,
+                        ncm=item_ncm,
+                        selection=resolution["selection"],
+                    ),
+                )
+                classification.tax_rule = resolved_rule
+                classification_map[item_number] = classification
+
+            if missing_rules:
+                details = ", ".join(
+                    f"item {item['duimp_item_number']} (NCM {item['ncm']})"
+                    for item in missing_rules
+                )
+                raise ValueError(
+                    "Nenhuma regra fiscal aplicável foi encontrada para: "
+                    f"{details}. Cadastre as regras antes de gerar o rascunho."
+                )
+            tax_rules = list(
+                {
+                    row.tax_rule.id: row.tax_rule
+                    for row in classification_map.values()
+                    if row.tax_rule
+                }.values()
+            )
+            tax_rule = tax_rules[0]
             tax_configuration = deepcopy(tax_rule.configuration_json or {})
 
         additional_costs = self._merge_defaults(
@@ -4514,6 +4786,15 @@ class ImportNfeService:
                 "0000" if manufacturer_fallback else item.get("manufacturer_code")
             )
             item_additional_info = item.get("additional_info")
+            tax_rule_snapshot = None
+            if classification and classification.tax_rule:
+                tax_rule_snapshot = deepcopy(
+                    classification.tax_rule_snapshot
+                    or self._tax_rule_snapshot(
+                        classification.tax_rule,
+                        ncm=self._digits(item.get("ncm")),
+                    )
+                )
             mapped_items.append(
                 {
                     "item_number": index,
@@ -4529,9 +4810,10 @@ class ImportNfeService:
                         if classification and classification.tax_rule_id
                         else None
                     ),
+                    "tax_rule_snapshot": tax_rule_snapshot,
                     "item_classification_id": (
                         str(classification.id)
-                        if classification
+                        if classification and classification.id
                         else None
                     ),
                     "cest": item.get("cest"),
@@ -4594,13 +4876,12 @@ class ImportNfeService:
             if row.tax_rule_id
         }
         if len(rule_ids) == 1:
-            only_rule = next(iter(item_classifications.values())).tax_rule
+            only_classification = next(iter(item_classifications.values()))
             return self.tax_calculator.calculate(
                 items,
-                configuration=(
-                    deepcopy(only_rule.configuration_json or {})
-                    if only_rule
-                    else fallback_configuration
+                configuration=self._classification_tax_configuration(
+                    only_classification,
+                    fallback_configuration,
                 ),
                 additional_costs=additional_costs,
                 preallocated_costs=preallocated_costs,
@@ -4622,9 +4903,10 @@ class ImportNfeService:
                 item_number
             )
             configuration = (
-                deepcopy(classification.tax_rule.configuration_json or {})
-                if classification and classification.tax_rule
-                else fallback_configuration
+                self._classification_tax_configuration(
+                    classification,
+                    fallback_configuration,
+                )
             )
             source_item = next(
                 source
@@ -4643,6 +4925,22 @@ class ImportNfeService:
             calculated_items,
             self.tax_calculator.calculate_totals(calculated_items),
         )
+
+    @staticmethod
+    def _classification_tax_configuration(
+        classification: NfeItemClassification | None,
+        fallback_configuration: dict[str, Any],
+    ) -> dict[str, Any]:
+        snapshot = (
+            classification.tax_rule_snapshot
+            if classification
+            else None
+        ) or {}
+        if snapshot.get("configuration_json") is not None:
+            return deepcopy(snapshot["configuration_json"])
+        if classification and classification.tax_rule:
+            return deepcopy(classification.tax_rule.configuration_json or {})
+        return deepcopy(fallback_configuration)
 
     def calculate_nfe_totals(self, items: list[dict[str, Any]]) -> dict[str, Any]:
         return self.tax_calculator.calculate_totals(items)
@@ -5074,6 +5372,9 @@ class ImportNfeService:
                 if item_payload.get("tax_rule_id")
                 else None
             ),
+            tax_rule_snapshot=deepcopy(
+                item_payload.get("tax_rule_snapshot")
+            ),
             item_classification_id=(
                 UUID(str(item_payload["item_classification_id"]))
                 if item_payload.get("item_classification_id")
@@ -5244,6 +5545,7 @@ class ImportNfeService:
             "cfop": item.cfop,
             "import_purpose": item.import_purpose,
             "tax_rule_id": str(item.tax_rule_id) if item.tax_rule_id else None,
+            "tax_rule_snapshot": deepcopy(item.tax_rule_snapshot),
             "item_classification_id": (
                 str(item.item_classification_id)
                 if item.item_classification_id
@@ -5378,7 +5680,10 @@ class ImportNfeService:
             "import_modality": rule.import_modality,
             "tax_regime": rule.tax_regime,
             "ncm_pattern": rule.ncm_pattern,
+            "ncm_scope_type": ImportNfeService._rule_ncm_scope_type(rule),
+            "ncm_patterns": ImportNfeService._rule_ncm_patterns(rule),
             "priority": rule.priority,
+            "revision": rule.revision or 1,
             "configuration_json": rule.configuration_json,
             "additional_cost_defaults": rule.additional_cost_defaults,
             "transport_defaults": rule.transport_defaults,
@@ -5391,6 +5696,20 @@ class ImportNfeService:
                 rule.effective_until.isoformat() if rule.effective_until else None
             ),
         }
+
+    @classmethod
+    def _tax_rule_snapshot(
+        cls,
+        rule: ClientImportTaxRule,
+        *,
+        ncm: str,
+        selection: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        snapshot = cls._tax_rule_to_dict(rule)
+        snapshot["tax_rule_id"] = snapshot.pop("id")
+        snapshot["applied_ncm"] = cls._digits(ncm)
+        snapshot["selection"] = deepcopy(selection or {})
+        return cls._json_compatible(snapshot)
 
     def _require_organization_id(self):
         if not self.organization_id:
