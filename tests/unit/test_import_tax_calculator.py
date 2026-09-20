@@ -85,6 +85,129 @@ def test_calculates_taxed_icms00_import():
     assert totals["icms_base"] == "9686.49"
     assert totals["icms_value"] == "1162.38"
 
+
+def test_calculates_icms10_with_mva_substitution_tax():
+    items, totals = ImportTaxCalculator().calculate(
+        [reference_item()],
+        configuration={
+            "icms_origin": "1",
+            "icms_cst": "10",
+            "icms_rate": "12",
+            "icms_st_base_method": "4",
+            "icms_st_mva_rate": "40",
+            "icms_st_rate": "18",
+        },
+    )
+
+    icms = items[0]["tax_payload"]["icms"]
+    assert icms["base"] == "9585.56"
+    assert icms["value"] == "1150.27"
+    assert icms["st_base"] == "13419.78"
+    assert icms["st_value"] == "1265.29"
+    assert icms["diagnostic_only"] is True
+    assert totals["icms_st_base"] == "13419.78"
+    assert totals["icms_st_value"] == "1265.29"
+    assert totals["invoice_value"] == "10850.85"
+
+
+def test_calculates_icms20_reduced_base_inside_price():
+    items, totals = ImportTaxCalculator().calculate(
+        [reference_item()],
+        configuration={
+            "icms_origin": "1",
+            "icms_cst": "20",
+            "icms_rate": "12",
+            "icms_base_reduction_rate": "25",
+        },
+    )
+
+    icms = items[0]["tax_payload"]["icms"]
+    assert icms["base_reduction_rate"] == "25.0000"
+    assert icms["base"] == "6952.16"
+    assert icms["value"] == "834.26"
+    assert totals["icms_base"] == "6952.16"
+    assert totals["icms_value"] == "834.26"
+
+
+def test_calculates_icms30_only_with_substitution_tax():
+    items, totals = ImportTaxCalculator().calculate(
+        [reference_item()],
+        configuration={
+            "icms_origin": "1",
+            "icms_cst": "30",
+            "icms_st_base_method": "4",
+            "icms_st_mva_rate": "40",
+            "icms_st_rate": "18",
+        },
+    )
+
+    icms = items[0]["tax_payload"]["icms"]
+    assert icms["base"] == "0.00"
+    assert icms["value"] == "0.00"
+    assert icms["st_base"] == "11809.41"
+    assert icms["st_value"] == "2125.69"
+    assert totals["icms_value"] == "0.00"
+    assert totals["icms_st_value"] == "2125.69"
+
+
+def test_preserves_previously_retained_values_for_icms60():
+    items, totals = ImportTaxCalculator().calculate(
+        [reference_item()],
+        configuration={
+            "icms_origin": "1",
+            "icms_cst": "60",
+            "icms_st_retained_base": "1000",
+            "icms_st_retained_rate": "18",
+            "icms_st_retained_value": "180",
+        },
+    )
+
+    icms = items[0]["tax_payload"]["icms"]
+    assert icms["retained_st_base"] == "1000.00"
+    assert icms["retained_st_rate"] == "18.0000"
+    assert icms["retained_st_value"] == "180.00"
+    assert totals["icms_st_value"] == "0.00"
+    assert totals["invoice_value"] == "8435.29"
+
+
+def test_calculates_icms70_reduced_base_and_substitution_tax():
+    items, totals = ImportTaxCalculator().calculate(
+        [reference_item()],
+        configuration={
+            "icms_origin": "1",
+            "icms_cst": "70",
+            "icms_rate": "12",
+            "icms_base_reduction_rate": "25",
+            "icms_st_base_method": "4",
+            "icms_st_mva_rate": "40",
+            "icms_st_rate": "18",
+        },
+    )
+
+    icms = items[0]["tax_payload"]["icms"]
+    assert icms["base"] == "6952.16"
+    assert icms["value"] == "834.26"
+    assert icms["st_base"] == "12977.37"
+    assert icms["st_value"] == "1501.67"
+    assert totals["icms_st_value"] == "1501.67"
+    assert totals["invoice_value"] == "10771.22"
+
+
+def test_requires_st_parameters_for_icms10():
+    with pytest.raises(ImportTaxCalculationError, match="alíquota ST"):
+        ImportTaxCalculator().calculate(
+            [reference_item()],
+            configuration={"icms_cst": "10", "icms_rate": "12"},
+        )
+
+
+def test_requires_retained_values_for_icms60():
+    with pytest.raises(ImportTaxCalculationError, match="retido anteriormente"):
+        ImportTaxCalculator().calculate(
+            [reference_item()],
+            configuration={"icms_cst": "60"},
+        )
+
 def test_allocates_costs_by_largest_remainder_with_exact_cent_total():
     calculator = ImportTaxCalculator()
     allocations = calculator.allocate(

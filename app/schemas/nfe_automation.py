@@ -148,6 +148,18 @@ class ClientImportTaxRuleSchema(Schema):
 
         base_reduction_rate = decimal_rate("icms_base_reduction_rate")
         deferment_rate = decimal_rate("icms_deferment_rate")
+        raw_st_mva_rate = configuration.get("icms_st_mva_rate")
+        if raw_st_mva_rate in (None, ""):
+            st_mva_rate = Decimal("0")
+        else:
+            try:
+                st_mva_rate = Decimal(str(raw_st_mva_rate))
+            except (InvalidOperation, TypeError, ValueError):
+                raise ValidationError(
+                    "configuration_json.icms_st_mva_rate deve ser numérico.",
+                    field_name="configuration_json",
+                )
+        decimal_rate("icms_st_base_reduction_rate")
         if base_reduction_rate > 0 and deferment_rate > 0:
             raise ValidationError(
                 "Redução de base e diferimento de ICMS não podem ser aplicados simultaneamente.",
@@ -155,10 +167,23 @@ class ClientImportTaxRuleSchema(Schema):
             )
 
         cst = str(configuration.get("icms_cst") or "90").zfill(2)
-        supported_csts = {"00", "40", "41", "50", "51", "90"}
+        supported_csts = {
+            "00",
+            "10",
+            "20",
+            "30",
+            "40",
+            "41",
+            "50",
+            "51",
+            "60",
+            "70",
+            "90",
+        }
         if cst not in supported_csts:
             raise ValidationError(
-                "configuration_json.icms_cst deve ser 00, 40, 41, 50, 51 ou 90.",
+                "configuration_json.icms_cst deve ser 00, 10, 20, 30, 40, 41, "
+                "50, 51, 60, 70 ou 90.",
                 field_name="configuration_json",
             )
         raw_rate = configuration.get("icms_rate")
@@ -169,13 +194,95 @@ class ClientImportTaxRuleSchema(Schema):
                 "booleano.",
                 field_name="configuration_json",
             )
-        if cst in {"40", "41", "50"}:
+        if cst in {"40", "41", "50", "30", "60"}:
             if raw_rate not in (None, ""):
                 raise ValidationError(
                     f"ICMS CST {cst} não aceita alíquota nominal.",
                     field_name="configuration_json",
                 )
+            if cst in {"40", "41", "50"}:
+                return
+
+        if cst in {"20", "70"} and base_reduction_rate <= 0:
+            raise ValidationError(
+                f"ICMS CST {cst} exige icms_base_reduction_rate maior que zero.",
+                field_name="configuration_json",
+            )
+
+        if cst in {"10", "30", "70"}:
+            st_base_method = str(
+                configuration.get("icms_st_base_method") or "6"
+            )
+            if st_base_method not in {"4", "6"}:
+                raise ValidationError(
+                    "configuration_json.icms_st_base_method deve ser 4 (MVA) "
+                    "ou 6 (valor da operação).",
+                    field_name="configuration_json",
+                )
+            if (
+                st_base_method == "4"
+                and configuration.get("icms_st_mva_rate") in (None, "")
+            ):
+                raise ValidationError(
+                    "ICMS ST com modalidade 4 exige icms_st_mva_rate.",
+                    field_name="configuration_json",
+                )
+            if not Decimal("0") <= st_mva_rate <= Decimal("999.9999"):
+                raise ValidationError(
+                    "configuration_json.icms_st_mva_rate deve estar entre 0 e "
+                    "999.9999.",
+                    field_name="configuration_json",
+                )
+            raw_st_rate = configuration.get("icms_st_rate")
+            try:
+                st_rate = Decimal(str(raw_st_rate))
+            except (InvalidOperation, TypeError, ValueError):
+                raise ValidationError(
+                    "configuration_json.icms_st_rate deve ser numérico.",
+                    field_name="configuration_json",
+                )
+            if not Decimal("0") < st_rate < Decimal("100"):
+                raise ValidationError(
+                    "configuration_json.icms_st_rate deve ser maior que 0 e "
+                    "menor que 100.",
+                    field_name="configuration_json",
+                )
+
+        if cst == "60":
+            retained_fields = (
+                "icms_st_retained_base",
+                "icms_st_retained_rate",
+                "icms_st_retained_value",
+            )
+            if any(configuration.get(field) in (None, "") for field in retained_fields):
+                raise ValidationError(
+                    "ICMS CST 60 exige base, alíquota e valor do ICMS ST retido "
+                    "anteriormente.",
+                    field_name="configuration_json",
+                )
+            for field in retained_fields:
+                try:
+                    retained_value = Decimal(str(configuration[field]))
+                except (InvalidOperation, TypeError, ValueError):
+                    raise ValidationError(
+                        f"configuration_json.{field} deve ser numérico.",
+                        field_name="configuration_json",
+                    )
+                if retained_value < 0:
+                    raise ValidationError(
+                        f"configuration_json.{field} não pode ser negativo.",
+                        field_name="configuration_json",
+                    )
+            if Decimal(str(configuration["icms_st_retained_rate"])) > Decimal(
+                "100"
+            ):
+                raise ValidationError(
+                    "configuration_json.icms_st_retained_rate deve ser menor "
+                    "ou igual a 100.",
+                    field_name="configuration_json",
+                )
             return
+
         if raw_rate in (None, "") and cst == "51":
             if (
                 deferment_rate != Decimal("100")
@@ -186,6 +293,8 @@ class ClientImportTaxRuleSchema(Schema):
                     "XML diagnóstico com diferimento ou redução de base de 100%.",
                     field_name="configuration_json",
                 )
+            return
+        if raw_rate in (None, "") and cst == "30":
             return
         try:
             rate = Decimal(str(raw_rate))

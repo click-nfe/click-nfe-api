@@ -191,10 +191,12 @@ class NfeXmlBuilder:
 
         icms_data = taxes["icms"]
         icms_cst = str(icms_data.get("cst") or "").zfill(2)
-        if icms_cst not in {"00", "40", "41", "50", "51", "90"}:
+        if icms_cst not in {
+            "00", "10", "20", "30", "40", "41", "50", "51", "60", "70", "90"
+        }:
             raise NfeXmlBuildError(
-                "Nesta etapa, o gerador suporta ICMS CST 00, 40, 41, 50, 51 ou 90 "
-                "para importação."
+                "Nesta etapa, o gerador suporta ICMS CST 00, 10, 20, 30, 40, "
+                "41, 50, 51, 60, 70 ou 90 para importação."
             )
         icms = ET.SubElement(imposto, self._tag("ICMS"))
         if icms_cst == "00":
@@ -205,6 +207,26 @@ class NfeXmlBuilder:
             self._text(icms00, "vBC", self._money(icms_data.get("base")))
             self._text(icms00, "pICMS", self._rate(icms_data.get("rate")))
             self._text(icms00, "vICMS", self._money(icms_data.get("value")))
+        elif icms_cst == "10":
+            icms10 = ET.SubElement(icms, self._tag("ICMS10"))
+            self._text(icms10, "orig", icms_data.get("origin") or "1")
+            self._text(icms10, "CST", "10")
+            self._build_icms_own_fields(icms10, icms_data)
+            self._build_icms_st_fields(icms10, icms_data)
+        elif icms_cst == "20":
+            icms20 = ET.SubElement(icms, self._tag("ICMS20"))
+            self._text(icms20, "orig", icms_data.get("origin") or "1")
+            self._text(icms20, "CST", "20")
+            self._build_icms_own_fields(
+                icms20,
+                icms_data,
+                require_reduction=True,
+            )
+        elif icms_cst == "30":
+            icms30 = ET.SubElement(icms, self._tag("ICMS30"))
+            self._text(icms30, "orig", icms_data.get("origin") or "1")
+            self._text(icms30, "CST", "30")
+            self._build_icms_st_fields(icms30, icms_data)
         elif icms_cst in {"40", "41", "50"}:
             icms40 = ET.SubElement(icms, self._tag("ICMS40"))
             self._text(icms40, "orig", icms_data.get("origin") or "1")
@@ -248,6 +270,35 @@ class NfeXmlBuilder:
                     "vICMS",
                     self._money(icms_data["value"]),
                 )
+        elif icms_cst == "60":
+            icms60 = ET.SubElement(icms, self._tag("ICMS60"))
+            self._text(icms60, "orig", icms_data.get("origin") or "1")
+            self._text(icms60, "CST", "60")
+            self._text(
+                icms60,
+                "vBCSTRet",
+                self._money(icms_data.get("retained_st_base")),
+            )
+            self._text(
+                icms60,
+                "pST",
+                self._rate(icms_data.get("retained_st_rate")),
+            )
+            self._text(
+                icms60,
+                "vICMSSTRet",
+                self._money(icms_data.get("retained_st_value")),
+            )
+        elif icms_cst == "70":
+            icms70 = ET.SubElement(icms, self._tag("ICMS70"))
+            self._text(icms70, "orig", icms_data.get("origin") or "1")
+            self._text(icms70, "CST", "70")
+            self._build_icms_own_fields(
+                icms70,
+                icms_data,
+                require_reduction=True,
+            )
+            self._build_icms_st_fields(icms70, icms_data)
         else:
             icms90 = ET.SubElement(icms, self._tag("ICMS90"))
             for tag, key, default in (
@@ -292,6 +343,42 @@ class NfeXmlBuilder:
         if taxes.get("ibs_cbs"):
             self._build_ibs_cbs(imposto, taxes["ibs_cbs"])
 
+    def _build_icms_own_fields(
+        self,
+        parent: ET.Element,
+        data: dict[str, Any],
+        *,
+        require_reduction: bool = False,
+    ) -> None:
+        self._text(parent, "modBC", data.get("base_method") or "3")
+        if require_reduction:
+            self._text(
+                parent,
+                "pRedBC",
+                self._rate(data.get("base_reduction_rate")),
+            )
+        self._text(parent, "vBC", self._money(data.get("base")))
+        self._text(parent, "pICMS", self._rate(data.get("rate")))
+        self._text(parent, "vICMS", self._money(data.get("value")))
+
+    def _build_icms_st_fields(
+        self,
+        parent: ET.Element,
+        data: dict[str, Any],
+    ) -> None:
+        self._text(parent, "modBCST", data.get("st_base_method") or "6")
+        if data.get("st_mva_rate") not in (None, ""):
+            self._text(parent, "pMVAST", self._rate(data["st_mva_rate"]))
+        if data.get("st_base_reduction_rate") not in (None, ""):
+            self._text(
+                parent,
+                "pRedBCST",
+                self._rate(data["st_base_reduction_rate"]),
+            )
+        self._text(parent, "vBCST", self._money(data.get("st_base")))
+        self._text(parent, "pICMSST", self._rate(data.get("st_rate")))
+        self._text(parent, "vICMSST", self._money(data.get("st_value")))
+
     def _build_contribution(self, parent: ET.Element, group: str, subtype: str, rate_tag: str, value_tag: str, data: dict[str, Any]) -> None:
         outer = ET.SubElement(parent, self._tag(group))
         inner = ET.SubElement(outer, self._tag(subtype))
@@ -322,7 +409,8 @@ class NfeXmlBuilder:
         icms = ET.SubElement(total, self._tag("ICMSTot"))
         values = (
             ("vBC", "icms_base"), ("vICMS", "icms_value"), ("vICMSDeson", None),
-            ("vFCP", None), ("vBCST", None), ("vST", None), ("vFCPST", None),
+            ("vFCP", None), ("vBCST", "icms_st_base"),
+            ("vST", "icms_st_value"), ("vFCPST", None),
             ("vFCPSTRet", None), ("vProd", "products_value"), ("vFrete", "freight_value"),
             ("vSeg", "insurance_value"), ("vDesc", "discount_value"), ("vII", "ii_value"),
             ("vIPI", "ipi_value"), ("vIPIDevol", None), ("vPIS", "pis_value"),

@@ -13,7 +13,20 @@ class ImportTaxCalculator:
     MONEY = Decimal("0.01")
     RATE = Decimal("0.0001")
     NON_TAXED_ICMS_CSTS = {"40", "41", "50"}
-    SUPPORTED_ICMS_CSTS = NON_TAXED_ICMS_CSTS | {"00", "51", "90"}
+    REDUCED_BASE_ICMS_CSTS = {"20", "70"}
+    ST_ICMS_CSTS = {"10", "30", "70"}
+    RETAINED_ST_ICMS_CSTS = {"60"}
+    REVIEWABLE_ICMS_CSTS = REDUCED_BASE_ICMS_CSTS | ST_ICMS_CSTS | RETAINED_ST_ICMS_CSTS
+    SUPPORTED_ICMS_CSTS = NON_TAXED_ICMS_CSTS | {
+        "00",
+        "10",
+        "20",
+        "30",
+        "51",
+        "60",
+        "70",
+        "90",
+    }
 
     def calculate(
         self,
@@ -29,7 +42,8 @@ class ImportTaxCalculator:
         icms_cst = str(configuration.get("icms_cst") or "90").zfill(2)
         if icms_cst not in self.SUPPORTED_ICMS_CSTS:
             raise ImportTaxCalculationError(
-                "ICMS CST não suportado. Informe 00, 40, 41, 50, 51 ou 90."
+                "ICMS CST não suportado. Informe 00, 10, 20, 30, 40, 41, 50, "
+                "51, 60, 70 ou 90."
             )
         raw_icms_rate = configuration.get("icms_rate")
         has_icms_rate = raw_icms_rate not in (None, "")
@@ -50,7 +64,20 @@ class ImportTaxCalculator:
         )
         has_base_reduction = raw_base_reduction_rate not in (None, "")
         base_reduction_rate = self._decimal(raw_base_reduction_rate)
-        if icms_cst in self.NON_TAXED_ICMS_CSTS:
+        st_base_method = str(configuration.get("icms_st_base_method") or "6")
+        raw_st_mva_rate = configuration.get("icms_st_mva_rate")
+        has_st_mva_rate = raw_st_mva_rate not in (None, "")
+        st_mva_rate = self._decimal(raw_st_mva_rate)
+        raw_st_base_reduction_rate = configuration.get(
+            "icms_st_base_reduction_rate"
+        )
+        has_st_base_reduction = raw_st_base_reduction_rate not in (None, "")
+        st_base_reduction_rate = self._decimal(raw_st_base_reduction_rate)
+        raw_st_rate = configuration.get("icms_st_rate")
+        has_st_rate = raw_st_rate not in (None, "")
+        st_rate = self._decimal(raw_st_rate)
+
+        if icms_cst in self.NON_TAXED_ICMS_CSTS | {"30", "60"}:
             if has_icms_rate:
                 raise ImportTaxCalculationError(
                     f"ICMS CST {icms_cst} não aceita alíquota nominal."
@@ -84,6 +111,83 @@ class ImportTaxCalculator:
             raise ImportTaxCalculationError(
                 "A alíquota de ICMS deve ser maior que zero e menor que 100."
             )
+
+        if icms_cst in self.REDUCED_BASE_ICMS_CSTS and not (
+            has_base_reduction
+            and Decimal("0") < base_reduction_rate <= Decimal("100")
+        ):
+            raise ImportTaxCalculationError(
+                f"ICMS CST {icms_cst} exige percentual de redução da base maior "
+                "que zero e menor ou igual a 100."
+            )
+
+        if icms_cst in self.ST_ICMS_CSTS:
+            if st_base_method not in {"4", "6"}:
+                raise ImportTaxCalculationError(
+                    "Nesta etapa, a modalidade da base do ICMS ST deve ser 4 "
+                    "(MVA) ou 6 (valor da operação)."
+                )
+            if st_base_method == "4" and not has_st_mva_rate:
+                raise ImportTaxCalculationError(
+                    "ICMS ST com modalidade 4 exige o percentual de MVA."
+                )
+            if not Decimal("0") <= st_mva_rate <= Decimal("999.9999"):
+                raise ImportTaxCalculationError(
+                    "O percentual de MVA do ICMS ST deve estar entre zero e "
+                    "999.9999."
+                )
+            if has_st_base_reduction and not (
+                Decimal("0") <= st_base_reduction_rate <= Decimal("100")
+            ):
+                raise ImportTaxCalculationError(
+                    "O percentual de redução da base do ICMS ST deve estar entre "
+                    "zero e 100."
+                )
+            if not has_st_rate or not Decimal("0") < st_rate < Decimal("100"):
+                raise ImportTaxCalculationError(
+                    "ICMS CST com substituição tributária exige alíquota ST maior "
+                    "que zero e menor que 100."
+                )
+
+        retained_st_base = self._money(
+            configuration.get("icms_st_retained_base")
+        )
+        retained_st_rate = self._decimal(
+            configuration.get("icms_st_retained_rate")
+        )
+        retained_st_value = self._money(
+            configuration.get("icms_st_retained_value")
+        )
+        if icms_cst in self.RETAINED_ST_ICMS_CSTS:
+            required_retained_fields = {
+                "icms_st_retained_base": configuration.get(
+                    "icms_st_retained_base"
+                ),
+                "icms_st_retained_rate": configuration.get(
+                    "icms_st_retained_rate"
+                ),
+                "icms_st_retained_value": configuration.get(
+                    "icms_st_retained_value"
+                ),
+            }
+            missing = [
+                name
+                for name, value in required_retained_fields.items()
+                if value in (None, "")
+            ]
+            if missing:
+                raise ImportTaxCalculationError(
+                    "ICMS CST 60 exige base, alíquota e valor do ICMS ST retido "
+                    "anteriormente."
+                )
+            if retained_st_base < 0 or retained_st_value < 0:
+                raise ImportTaxCalculationError(
+                    "Base e valor do ICMS ST retido não podem ser negativos."
+                )
+            if not Decimal("0") <= retained_st_rate <= Decimal("100"):
+                raise ImportTaxCalculationError(
+                    "A alíquota do ICMS ST retido deve estar entre zero e 100."
+                )
 
         costs = additional_costs or {}
         cost_totals = {
@@ -245,7 +349,8 @@ class ImportTaxCalculator:
                 + item_other
                 - discount
             )
-            if icms_cst in self.NON_TAXED_ICMS_CSTS:
+            icms_full_base = None
+            if icms_cst in self.NON_TAXED_ICMS_CSTS | {"30", "60"}:
                 icms_base = Decimal("0.00")
                 icms_operation_value = None
                 icms_deferred_value = None
@@ -293,15 +398,54 @@ class ImportTaxCalculator:
                     if not has_icms_rate and has_base_reduction
                     else calculated_icms_value
                 )
-            else:
-                icms_base = self._money(
+            elif icms_cst in self.REDUCED_BASE_ICMS_CSTS:
+                effective_rate = icms_rate * (
+                    Decimal("1") - base_reduction_rate / Decimal("100")
+                )
+                icms_full_base = self._money(
                     icms_base_numerator
-                    / (Decimal("1") - icms_rate / Decimal("100"))
+                    / (Decimal("1") - effective_rate / Decimal("100"))
+                )
+                icms_base = self._money(
+                    icms_full_base
+                    * (Decimal("1") - base_reduction_rate / Decimal("100"))
                 )
                 icms_operation_value = None
                 icms_deferred_value = None
                 icms_value = self._money(
                     icms_base * icms_rate / Decimal("100")
+                )
+            else:
+                icms_full_base = self._money(
+                    icms_base_numerator
+                    / (Decimal("1") - icms_rate / Decimal("100"))
+                )
+                icms_base = icms_full_base
+                icms_operation_value = None
+                icms_deferred_value = None
+                icms_value = self._money(
+                    icms_base * icms_rate / Decimal("100")
+                )
+
+            st_base = Decimal("0.00")
+            st_value = Decimal("0.00")
+            if icms_cst in self.ST_ICMS_CSTS:
+                st_source_base = icms_full_base or icms_base_numerator
+                if st_base_method == "4":
+                    st_source_base *= Decimal("1") + st_mva_rate / Decimal(
+                        "100"
+                    )
+                st_base = self._money(
+                    st_source_base
+                    * (
+                        Decimal("1")
+                        - st_base_reduction_rate / Decimal("100")
+                    )
+                )
+                st_total = self._money(st_base * st_rate / Decimal("100"))
+                st_value = max(
+                    st_total - (icms_value or Decimal("0.00")),
+                    Decimal("0.00"),
                 )
 
             taxes["icms"] = {
@@ -311,7 +455,8 @@ class ImportTaxCalculator:
                 "base": self._format_money(icms_base),
                 "base_reduction_rate": (
                     self._format_rate(base_reduction_rate)
-                    if icms_cst == "51" and has_base_reduction
+                    if icms_cst in self.REDUCED_BASE_ICMS_CSTS | {"51"}
+                    and has_base_reduction
                     else None
                 ),
                 "base_benefit_code": (
@@ -347,7 +492,8 @@ class ImportTaxCalculator:
                 ),
                 "tax_treatment_confirmed": (
                     tax_treatment_confirmed
-                    if icms_cst in self.NON_TAXED_ICMS_CSTS
+                    if icms_cst
+                    in self.NON_TAXED_ICMS_CSTS | self.REVIEWABLE_ICMS_CSTS
                     else None
                 ),
                 "diagnostic_only": (
@@ -356,11 +502,46 @@ class ImportTaxCalculator:
                         icms_cst in self.NON_TAXED_ICMS_CSTS
                         and not tax_treatment_confirmed
                     )
+                    or (
+                        icms_cst in self.REVIEWABLE_ICMS_CSTS
+                        and not tax_treatment_confirmed
+                    )
                 ),
-                "st_base_method": str(configuration.get("icms_st_base_method") or "6"),
-                "st_base": "0.00",
-                "st_rate": "0.0000",
-                "st_value": "0.00",
+                "st_base_method": st_base_method,
+                "st_mva_rate": (
+                    self._format_rate(st_mva_rate)
+                    if icms_cst in self.ST_ICMS_CSTS
+                    and st_base_method == "4"
+                    else None
+                ),
+                "st_base_reduction_rate": (
+                    self._format_rate(st_base_reduction_rate)
+                    if icms_cst in self.ST_ICMS_CSTS
+                    and has_st_base_reduction
+                    else None
+                ),
+                "st_base": self._format_money(st_base),
+                "st_rate": (
+                    self._format_rate(st_rate)
+                    if icms_cst in self.ST_ICMS_CSTS
+                    else "0.0000"
+                ),
+                "st_value": self._format_money(st_value),
+                "retained_st_base": (
+                    self._format_money(retained_st_base)
+                    if icms_cst in self.RETAINED_ST_ICMS_CSTS
+                    else None
+                ),
+                "retained_st_rate": (
+                    self._format_rate(retained_st_rate)
+                    if icms_cst in self.RETAINED_ST_ICMS_CSTS
+                    else None
+                ),
+                "retained_st_value": (
+                    self._format_money(retained_st_value)
+                    if icms_cst in self.RETAINED_ST_ICMS_CSTS
+                    else None
+                ),
                 "duimp_value": (
                     source_icms.get("duimp_value")
                     if source_icms.get("duimp_value") not in (None, "")
@@ -476,6 +657,8 @@ class ImportTaxCalculator:
             "cofins_value": Decimal("0"),
             "icms_base": Decimal("0"),
             "icms_value": Decimal("0"),
+            "icms_st_base": Decimal("0"),
+            "icms_st_value": Decimal("0"),
             "ibs_cbs_base": Decimal("0"),
             "ibs_uf_value": Decimal("0"),
             "ibs_mun_value": Decimal("0"),
@@ -516,6 +699,12 @@ class ImportTaxCalculator:
             fields["icms_base"] += self._money(
                 (taxes.get("icms") or {}).get("base")
             )
+            fields["icms_st_base"] += self._money(
+                (taxes.get("icms") or {}).get("st_base")
+            )
+            fields["icms_st_value"] += self._money(
+                (taxes.get("icms") or {}).get("st_value")
+            )
             ibs_cbs = taxes.get("ibs_cbs") or {}
             for key in [
                 "ibs_cbs_base",
@@ -545,6 +734,7 @@ class ImportTaxCalculator:
             + fields["pis_value"]
             + fields["cofins_value"]
             + fields["icms_value"]
+            + fields["icms_st_value"]
             - fields["discount_value"]
         )
         rtc_invoice_value = (
@@ -554,6 +744,7 @@ class ImportTaxCalculator:
             + fields["other_value"]
             + fields["ii_value"]
             + fields["ipi_value"]
+            + fields["icms_st_value"]
             - fields["discount_value"]
         )
         fields["invoice_value"] = invoice_value

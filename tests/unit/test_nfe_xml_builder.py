@@ -1,5 +1,7 @@
 from xml.etree import ElementTree as ET
 
+import pytest
+
 from app.services.nfe_xml_builder import NfeXmlBuilder
 from app.services.nfe_xsd_validator import NfeXsdValidator
 
@@ -162,6 +164,97 @@ def test_builds_xsd_valid_icms00_group():
     assert icms00.findtext("nfe:pICMS", namespaces=NS) == "12.0000"
     assert icms00.findtext("nfe:vICMS", namespaces=NS) == "1162.38"
     assert root.find(".//nfe:ICMS90", NS) is None
+    assert NfeXsdValidator().validate(xml, allow_unsigned=True).is_valid is True
+
+
+@pytest.mark.parametrize(
+    ("cst", "icms_data", "expected"),
+    [
+        (
+            "10",
+            {
+                "base_method": "3",
+                "base": "9585.56",
+                "rate": "12",
+                "value": "1150.27",
+                "st_base_method": "4",
+                "st_mva_rate": "40",
+                "st_base": "13419.78",
+                "st_rate": "18",
+                "st_value": "1265.29",
+            },
+            {"vBC": "9585.56", "pMVAST": "40.0000", "vICMSST": "1265.29"},
+        ),
+        (
+            "20",
+            {
+                "base_method": "3",
+                "base_reduction_rate": "25",
+                "base": "6952.16",
+                "rate": "12",
+                "value": "834.26",
+            },
+            {"pRedBC": "25.0000", "vBC": "6952.16", "vICMS": "834.26"},
+        ),
+        (
+            "30",
+            {
+                "st_base_method": "6",
+                "st_base": "8435.29",
+                "st_rate": "18",
+                "st_value": "1518.35",
+            },
+            {"modBCST": "6", "vBCST": "8435.29", "vICMSST": "1518.35"},
+        ),
+        (
+            "60",
+            {
+                "retained_st_base": "1000",
+                "retained_st_rate": "18",
+                "retained_st_value": "180",
+            },
+            {"vBCSTRet": "1000.00", "pST": "18.0000", "vICMSSTRet": "180.00"},
+        ),
+        (
+            "70",
+            {
+                "base_method": "3",
+                "base_reduction_rate": "25",
+                "base": "6952.16",
+                "rate": "12",
+                "value": "834.26",
+                "st_base_method": "4",
+                "st_mva_rate": "40",
+                "st_base": "12977.37",
+                "st_rate": "18",
+                "st_value": "1501.67",
+            },
+            {"pRedBC": "25.0000", "vBCST": "12977.37", "vICMSST": "1501.67"},
+        ),
+    ],
+)
+def test_builds_xsd_valid_additional_icms_groups(cst, icms_data, expected):
+    data = payload()
+    data["items"][0]["tax_payload"]["icms"] = {
+        "origin": "1",
+        "cst": cst,
+        **icms_data,
+    }
+    data["totals"]["icms_base"] = icms_data.get("base", "0")
+    data["totals"]["icms_value"] = icms_data.get("value", "0")
+    data["totals"]["icms_st_base"] = icms_data.get("st_base", "0")
+    data["totals"]["icms_st_value"] = icms_data.get("st_value", "0")
+
+    xml = NfeXmlBuilder().build(
+        data,
+        access_key="41260700000000000191550010000144221763362375",
+    )
+    root = ET.fromstring(xml)
+    group = root.find(f".//nfe:ICMS{cst}", NS)
+
+    assert group is not None
+    for tag, value in expected.items():
+        assert group.findtext(f"nfe:{tag}", namespaces=NS) == value
     assert NfeXsdValidator().validate(xml, allow_unsigned=True).is_valid is True
 
 def test_normalizes_nfe_datetime_to_seconds():

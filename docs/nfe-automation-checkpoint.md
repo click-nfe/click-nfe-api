@@ -306,6 +306,35 @@ fundamento aplicável à operação de entrada. A confirmação da NF-e de saíd
 deve ser reaproveitada automaticamente, pois saída temporária e retorno de
 importação são fatos fiscais distintos.
 
+## 6.1. CSTs com redução e substituição tributária
+
+O motor também aceita os grupos do regime normal `10`, `20`, `30`, `60` e
+`70`. Eles permanecem em modo diagnóstico até que a regra informe
+`icms_tax_treatment_confirmed=true` após homologação fiscal.
+
+| CST | Tratamento | Parâmetros adicionais obrigatórios |
+| --- | --- | --- |
+| `10` | ICMS próprio e ICMS-ST | `icms_rate`, `icms_st_rate` e modalidade ST |
+| `20` | redução da base própria | `icms_rate` e `icms_base_reduction_rate` |
+| `30` | isenção/não tributação com ICMS-ST | `icms_st_rate` e modalidade ST |
+| `60` | ICMS-ST retido anteriormente | base, alíquota e valor retidos |
+| `70` | redução da base própria e ICMS-ST | parâmetros dos CSTs `20` e `10` |
+
+Para a base de ICMS-ST, esta etapa implementa `icms_st_base_method=4` (MVA) e
+`6` (valor da operação). A modalidade `4` exige `icms_st_mva_rate`; ambas
+aceitam `icms_st_base_reduction_rate`. O valor de ST devido é a diferença não
+negativa entre o imposto calculado sobre a base ST e o ICMS próprio do item.
+
+Na CST `60`, os campos `icms_st_retained_base`, `icms_st_retained_rate` e
+`icms_st_retained_value` são reproduzidos no XML como dados da retenção
+anterior. Eles não entram novamente em `vST` nem no valor total da nota.
+
+O bloqueio `unconfirmed_icms_cst_calculation` impede assinatura e futura
+transmissão enquanto qualquer item desses CSTs estiver sem confirmação. A
+validação XSD garante somente a estrutura do XML; MVA, redução, alíquota,
+benefício e aplicabilidade por UF/NCM precisam ser confrontados com documentos
+reais e aprovados pela equipe fiscal antes do uso oficial.
+
 Após o novo `duimp/fetch`, a normalização também:
 
 - consulta o CCT pelo AWB do documento de instrução tipo `30`, antes da RUC;
