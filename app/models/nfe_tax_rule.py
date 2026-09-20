@@ -36,10 +36,14 @@ class ClientImportTaxRule(Base):
     import_purpose = Column(String(30), nullable=False, index=True)
     import_modality = Column(String(30), nullable=True, index=True)
     tax_regime = Column(String(2), nullable=True)
-    # NCM completo ou prefixo. Nulo significa regra padrão para os NCMs.
+    # Compatibilidade com integrações anteriores. Novas integrações devem usar
+    # ncm_scope_type/ncm_patterns.
     ncm_pattern = Column(String(8), nullable=True, index=True)
+    ncm_scope_type = Column(String(10), nullable=False, default="all", index=True)
+    ncm_patterns = Column(JSON, nullable=False, default=list)
 
     priority = Column(Integer, nullable=False, default=0)
+    revision = Column(Integer, nullable=False, default=1)
     configuration_json = Column(JSON, nullable=False)
     additional_cost_defaults = Column(JSON, nullable=True)
     transport_defaults = Column(JSON, nullable=True)
@@ -61,4 +65,3 @@ class ClientImportTaxRule(Base):
     organization = relationship("Organization")
     client = relationship("Client", foreign_keys=[client_id])
     created_by = relationship("User", foreign_keys=[created_by_user_id])
-
