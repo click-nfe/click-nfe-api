@@ -4978,6 +4978,26 @@ class ImportNfeService:
                     ),
                 }
             )
+        pending_homologation = diagnostic_treatments & {
+            "10",
+            "20",
+            "30",
+            "60",
+            "70",
+        }
+        if pending_homologation:
+            blockers.append(
+                {
+                    "code": "unconfirmed_icms_cst_calculation",
+                    "field": "tax_configuration.icms_tax_treatment_confirmed",
+                    "message": (
+                        "A assinatura e a transmissão estão bloqueadas até a "
+                        "equipe fiscal homologar o cálculo dos CSTs de ICMS: "
+                        + ", ".join(sorted(pending_homologation))
+                        + "."
+                    ),
+                }
+            )
         return {
             "ready": not blockers,
             "blockers": blockers,
@@ -5526,6 +5546,15 @@ class ImportNfeService:
             "icms_rate": icms.get("rate"),
             "icms_base_reduction_rate": icms.get("base_reduction_rate"),
             "icms_deferment_rate": icms.get("deferment_rate"),
+            "icms_st_base_method": icms.get("st_base_method"),
+            "icms_st_mva_rate": icms.get("st_mva_rate"),
+            "icms_st_base_reduction_rate": icms.get(
+                "st_base_reduction_rate"
+            ),
+            "icms_st_rate": icms.get("st_rate"),
+            "icms_st_retained_base": icms.get("retained_st_base"),
+            "icms_st_retained_rate": icms.get("retained_st_rate"),
+            "icms_st_retained_value": icms.get("retained_st_value"),
             "icms_tax_treatment_confirmed": icms.get("tax_treatment_confirmed"),
             "ipi_cst": ipi.get("cst") or "49",
             "ipi_enquiry_code": ipi.get("enquiry_code") or "999",

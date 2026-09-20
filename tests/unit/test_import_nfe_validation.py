@@ -267,3 +267,66 @@ def test_validation_accepts_confirmed_non_taxed_icms_treatment():
         "blockers": [],
         "mode": "fiscal",
     }
+
+
+def test_validation_blocks_additional_csts_until_fiscal_homologation():
+    service = ImportNfeService(
+        current_user=SimpleNamespace(organization_id=None, id=None)
+    )
+
+    authorization = service._authorization_metadata(
+        [
+            {
+                "tax_payload": {
+                    "icms": {"cst": cst, "diagnostic_only": True}
+                }
+            }
+            for cst in ("10", "20", "30", "60", "70")
+        ]
+    )
+
+    assert authorization["ready"] is False
+    assert authorization["mode"] == "diagnostic"
+    assert authorization["blockers"] == [
+        {
+            "code": "unconfirmed_icms_cst_calculation",
+            "field": "tax_configuration.icms_tax_treatment_confirmed",
+            "message": (
+                "A assinatura e a transmissão estão bloqueadas até a equipe "
+                "fiscal homologar o cálculo dos CSTs de ICMS: 10, 20, 30, 60, "
+                "70."
+            ),
+        }
+    ]
+
+
+def test_tax_configuration_round_trip_preserves_st_parameters():
+    item = SimpleNamespace(
+        tax_payload={
+            "icms": {
+                "origin": "1",
+                "cst": "70",
+                "base_method": "3",
+                "rate": "12.0000",
+                "base_reduction_rate": "25.0000",
+                "st_base_method": "4",
+                "st_mva_rate": "40.0000",
+                "st_base_reduction_rate": "10.0000",
+                "st_rate": "18.0000",
+                "retained_st_base": None,
+                "retained_st_rate": None,
+                "retained_st_value": None,
+                "tax_treatment_confirmed": False,
+            },
+            "ipi": {"cst": "49", "enquiry_code": "999"},
+            "pis": {"cst": "98"},
+            "cofins": {"cst": "98"},
+        }
+    )
+
+    configuration = ImportNfeService._tax_configuration_from_item(item)
+
+    assert configuration["icms_st_base_method"] == "4"
+    assert configuration["icms_st_mva_rate"] == "40.0000"
+    assert configuration["icms_st_base_reduction_rate"] == "10.0000"
+    assert configuration["icms_st_rate"] == "18.0000"

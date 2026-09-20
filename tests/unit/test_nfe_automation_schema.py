@@ -110,6 +110,98 @@ def test_rejects_nominal_rate_for_non_taxed_icms_rule():
         ClientImportTaxRuleSchema().load(payload)
 
 
+@pytest.mark.parametrize(
+    ("cst", "extra"),
+    [
+        (
+            "10",
+            {
+                "icms_rate": "12",
+                "icms_st_base_method": "4",
+                "icms_st_mva_rate": "40",
+                "icms_st_rate": "18",
+            },
+        ),
+        ("20", {"icms_rate": "12", "icms_base_reduction_rate": "25"}),
+        (
+            "30",
+            {
+                "icms_st_base_method": "6",
+                "icms_st_rate": "18",
+            },
+        ),
+        (
+            "60",
+            {
+                "icms_st_retained_base": "1000",
+                "icms_st_retained_rate": "18",
+                "icms_st_retained_value": "180",
+            },
+        ),
+        (
+            "70",
+            {
+                "icms_rate": "12",
+                "icms_base_reduction_rate": "25",
+                "icms_st_base_method": "4",
+                "icms_st_mva_rate": "40",
+                "icms_st_rate": "18",
+            },
+        ),
+    ],
+)
+def test_accepts_additional_normal_regime_icms_csts(cst, extra):
+    payload = {
+        "name": f"Regra CST {cst}",
+        "issuer_state": "PR",
+        "import_purpose": "resale",
+        "configuration_json": {
+            "cfop": "3102",
+            "icms_origin": "1",
+            "icms_cst": cst,
+            **extra,
+        },
+    }
+
+    result = ClientImportTaxRuleSchema().load(payload)
+
+    assert result["configuration_json"]["icms_cst"] == cst
+
+
+def test_rejects_icms20_without_base_reduction():
+    payload = {
+        "name": "CST 20 incompleta",
+        "issuer_state": "PR",
+        "import_purpose": "resale",
+        "configuration_json": {
+            "cfop": "3102",
+            "icms_origin": "1",
+            "icms_cst": "20",
+            "icms_rate": "12",
+        },
+    }
+
+    with pytest.raises(ValidationError, match="exige icms_base_reduction_rate"):
+        ClientImportTaxRuleSchema().load(payload)
+
+
+def test_rejects_icms30_without_st_rate():
+    payload = {
+        "name": "CST 30 incompleta",
+        "issuer_state": "PR",
+        "import_purpose": "resale",
+        "configuration_json": {
+            "cfop": "3102",
+            "icms_origin": "1",
+            "icms_cst": "30",
+            "icms_st_base_method": "6",
+        },
+    }
+
+    with pytest.raises(ValidationError, match="icms_st_rate"):
+        ClientImportTaxRuleSchema().load(payload)
+
+
 def test_checkpoint_4a_defaults_new_operations_to_production():
     assert FetchDuimpSchema().load({})["provider_environment"] == "production"
     assert NfeWorkflowStateQuerySchema().load({})["environment"] == "production"
