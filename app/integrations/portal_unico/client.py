@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 import re
 import socket
+import tempfile
+import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
+
+from cryptography.fernet import Fernet, InvalidToken
 
 
 class PortalUnicoIntegrationError(RuntimeError):
@@ -72,6 +79,184 @@ class PortalUnicoCredentials:
 class PortalCredentialResolver(Protocol):
     def resolve(self, credentials_ref: str, *, role_type: str) -> PortalUnicoCredentials:
         ...
+
+
+class PortalCredentialStore(PortalCredentialResolver, Protocol):
+    provider: str
+
+    def store(
+        self,
+        *,
+        organization_id: str,
+        credentials: PortalUnicoCredentials,
+    ) -> str:
+        ...
+
+    def delete(self, credentials_ref: str) -> None:
+        ...
+
+
+class LocalEncryptedFilePortalCredentialStore:
+    """Cofre local criptografado para as chaves do Portal Único.
+
+    O banco recebe somente uma referência opaca. O conteúdo é persistido com
+    Fernet em um volume Docker e pode ser substituído por um writer do Google
+    Secret Manager sem alterar as rotas da aplicação.
+    """
+
+    provider = "local_encrypted_file"
+    _REFERENCE = re.compile(
+        r"^local:([0-9a-f-]{36})/([0-9a-f]{32})\.portal\.json\.enc$"
+    )
+
+    def __init__(
+        self,
+        *,
+        root_dir: str | Path | None = None,
+        encryption_key: str | bytes | None = None,
+        secret_key: str | None = None,
+    ) -> None:
+        self.root_dir = Path(
+            root_dir
+            or os.getenv(
+                "PORTAL_UNICO_LOCAL_SECRET_DIR",
+                "/app/data/portal-unico",
+            )
+        ).resolve()
+        self._fernet = Fernet(
+            self._key(
+                encryption_key
+                or os.getenv("PORTAL_UNICO_LOCAL_SECRET_KEY"),
+                secret_key=secret_key or os.getenv("SECRET_KEY"),
+            )
+        )
+
+    def store(
+        self,
+        *,
+        organization_id: str,
+        credentials: PortalUnicoCredentials,
+    ) -> str:
+        organization = self._uuid(organization_id)
+        token = uuid.uuid4().hex
+        reference = f"local:{organization}/{token}.portal.json.enc"
+        payload = json.dumps(
+            {
+                "version": 1,
+                "client_id": credentials.client_id,
+                "client_secret": credentials.client_secret,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        self._write(reference, payload)
+        return reference
+
+    def resolve(
+        self,
+        credentials_ref: str,
+        *,
+        role_type: str,
+    ) -> PortalUnicoCredentials:
+        try:
+            encrypted = self._path(credentials_ref).read_bytes()
+            payload = json.loads(self._fernet.decrypt(encrypted).decode("utf-8"))
+            if payload.get("version") != 1:
+                raise ValueError("unsupported payload version")
+            return PortalUnicoCredentials(
+                client_id=str(payload.get("client_id") or ""),
+                client_secret=str(payload.get("client_secret") or ""),
+                role_type=role_type,
+            )
+        except FileNotFoundError as exc:
+            raise PortalUnicoIntegrationError(
+                "As credenciais locais do Portal Único não foram encontradas."
+            ) from exc
+        except InvalidToken as exc:
+            raise PortalUnicoIntegrationError(
+                "As credenciais locais do Portal Único não puderam ser descriptografadas."
+            ) from exc
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+            raise PortalUnicoIntegrationError(
+                "As credenciais locais do Portal Único são inválidas."
+            ) from exc
+
+    def delete(self, credentials_ref: str) -> None:
+        try:
+            self._path(credentials_ref).unlink(missing_ok=True)
+        except (OSError, PortalUnicoIntegrationError):
+            return
+
+    def _write(self, reference: str, content: bytes) -> None:
+        path = self._path(reference)
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        temporary_name = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                dir=path.parent,
+                prefix=".credential-",
+                delete=False,
+            ) as temporary:
+                temporary.write(self._fernet.encrypt(content))
+                temporary.flush()
+                os.fsync(temporary.fileno())
+                temporary_name = temporary.name
+            os.chmod(temporary_name, 0o600)
+            os.replace(temporary_name, path)
+        finally:
+            if temporary_name:
+                Path(temporary_name).unlink(missing_ok=True)
+
+    def _path(self, reference: str) -> Path:
+        match = self._REFERENCE.fullmatch(str(reference or ""))
+        if not match:
+            raise PortalUnicoIntegrationError(
+                "A referência local das credenciais do Portal Único é inválida."
+            )
+        relative = Path(match.group(1), f"{match.group(2)}.portal.json.enc")
+        path = (self.root_dir / relative).resolve()
+        if not path.is_relative_to(self.root_dir):
+            raise PortalUnicoIntegrationError(
+                "A referência local das credenciais do Portal Único é inválida."
+            )
+        return path
+
+    @staticmethod
+    def _key(
+        configured: str | bytes | None,
+        *,
+        secret_key: str | None,
+    ) -> bytes:
+        if configured:
+            value = (
+                configured.encode("ascii")
+                if isinstance(configured, str)
+                else configured
+            )
+            try:
+                Fernet(value)
+            except (ValueError, TypeError) as exc:
+                raise PortalUnicoIntegrationError(
+                    "PORTAL_UNICO_LOCAL_SECRET_KEY não contém uma chave Fernet válida."
+                ) from exc
+            return value
+        if not secret_key:
+            raise PortalUnicoIntegrationError(
+                "PORTAL_UNICO_LOCAL_SECRET_KEY ou SECRET_KEY é obrigatória para o cofre local."
+            )
+        digest = hashlib.sha256(
+            f"click-nfe-local-portal-unico:{secret_key}".encode("utf-8")
+        ).digest()
+        return base64.urlsafe_b64encode(digest)
+
+    @staticmethod
+    def _uuid(value: str) -> str:
+        try:
+            return str(uuid.UUID(str(value)))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise PortalUnicoIntegrationError(
+                "O identificador da organização é inválido."
+            ) from exc
 
 
 class EnvironmentPortalCredentialResolver:
@@ -198,6 +383,7 @@ class DefaultPortalCredentialResolver:
         *,
         environment_resolver: PortalCredentialResolver | None = None,
         gcp_resolver: PortalCredentialResolver | None = None,
+        local_resolver: PortalCredentialResolver | None = None,
     ) -> None:
         self.environment_resolver = (
             environment_resolver or EnvironmentPortalCredentialResolver()
@@ -205,6 +391,7 @@ class DefaultPortalCredentialResolver:
         self.gcp_resolver = (
             gcp_resolver or GcpSecretManagerPortalCredentialResolver()
         )
+        self.local_resolver = local_resolver
 
     def resolve(self, credentials_ref: str, *, role_type: str) -> PortalUnicoCredentials:
         reference = str(credentials_ref or "")
@@ -212,9 +399,56 @@ class DefaultPortalCredentialResolver:
             return self.environment_resolver.resolve(reference, role_type=role_type)
         if reference.startswith("gcp:"):
             return self.gcp_resolver.resolve(reference, role_type=role_type)
+        if reference.startswith("local:"):
+            local_resolver = (
+                self.local_resolver
+                or LocalEncryptedFilePortalCredentialStore()
+            )
+            return local_resolver.resolve(reference, role_type=role_type)
         raise PortalUnicoIntegrationError(
-            "credentials_ref deve começar com env: ou gcp:."
+            "credentials_ref deve começar com local:, env: ou gcp:."
         )
+
+
+def portal_credential_store_from_config(
+    config: Mapping[str, Any],
+) -> PortalCredentialStore:
+    configured = config.get("PORTAL_UNICO_CREDENTIAL_STORE")
+    if configured is not None:
+        return configured
+    provider = config.get(
+        "PORTAL_UNICO_CREDENTIAL_STORAGE_PROVIDER",
+        "local_encrypted_file",
+    )
+    if provider != "local_encrypted_file":
+        raise PortalUnicoIntegrationError(
+            "O provider de gravação das credenciais do Portal Único não é suportado."
+        )
+    return LocalEncryptedFilePortalCredentialStore(
+        root_dir=config.get(
+            "PORTAL_UNICO_LOCAL_SECRET_DIR",
+            "/app/data/portal-unico",
+        ),
+        encryption_key=config.get("PORTAL_UNICO_LOCAL_SECRET_KEY"),
+        secret_key=config.get("SECRET_KEY"),
+    )
+
+
+def portal_credential_resolver_from_config(
+    config: Mapping[str, Any],
+) -> PortalCredentialResolver:
+    configured = config.get("PORTAL_UNICO_CREDENTIAL_RESOLVER")
+    if configured is not None:
+        return configured
+    local_store = LocalEncryptedFilePortalCredentialStore(
+        root_dir=config.get(
+            "PORTAL_UNICO_LOCAL_SECRET_DIR",
+            "/app/data/portal-unico",
+        ),
+        encryption_key=config.get("PORTAL_UNICO_LOCAL_SECRET_KEY"),
+        secret_key=config.get("SECRET_KEY"),
+    )
+    return DefaultPortalCredentialResolver(local_resolver=local_store)
 
 
 @dataclass(frozen=True)

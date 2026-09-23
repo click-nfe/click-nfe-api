@@ -213,6 +213,10 @@ preservados.
 | `VIA_CEP_BASE_URL` | Provedor primário usado na consulta pontual de CEP | `https://viacep.com.br` |
 | `CEP_LOOKUP_TIMEOUT_SECONDS` | Limite individual por provedor de CEP | `4` |
 | `CEP_CACHE_TTL_SECONDS` | Validade do endereço em cache antes de nova consulta | `2592000` |
+| `PORTAL_UNICO_CREDENTIAL_STORAGE_PROVIDER` | Destino das credenciais cadastradas pela organização | `local_encrypted_file` |
+| `PORTAL_UNICO_LOCAL_SECRET_DIR` | Diretório do cofre local do Portal Único | `/app/data/portal-unico` |
+| `PORTAL_UNICO_LOCAL_SECRET_KEY` | Chave Fernet exclusiva do cofre do Portal Único | derivada de `SECRET_KEY` no desenvolvimento |
+| `PORTAL_UNICO_TIMEOUT_SECONDS` | Limite da autenticação no Portal Único | `30` |
 | `NFE_CERTIFICATE_STORAGE_PROVIDER` | Destino dos novos uploads A1 | `local_encrypted_file` |
 | `NFE_LOCAL_CERTIFICATE_DIR` | Diretório do cofre local criptografado | `/app/data/certificates` |
 | `NFE_LOCAL_CERTIFICATE_KEY` | Chave Fernet exclusiva do cofre local | derivada de `SECRET_KEY` no desenvolvimento |
@@ -234,6 +238,51 @@ o ViaCEP e usa a BrasilAPI como alternativa. O endereço normalizado, inclusive 
 código IBGE do município e o código BACEN do Brasil, é armazenado no PostgreSQL.
 O cache reduz chamadas externas e um registro expirado pode ser utilizado como
 fallback somente quando todos os provedores estiverem indisponíveis.
+
+### Credenciais do Portal Único no ambiente local
+
+As credenciais pertencem à organização, não ao cliente. Um administrador pode
+configurar o par de chaves em:
+
+`PUT /organizations/me/integrations/portal-unico`
+
+```json
+{
+  "client_id": "<Client-Id>",
+  "client_secret": "<Client-Secret>"
+}
+```
+
+A API criptografa o par no volume Docker `click_nfe_portal_unico_data` e grava
+no PostgreSQL somente uma referência `local:` e metadados não secretos. O
+Client-Secret não é devolvido pela API. Depois do cadastro, valide a autenticação
+real com:
+
+`POST /organizations/me/integrations/portal-unico/test`
+
+O estado público pode ser consultado por usuários autenticados em:
+
+`GET /organizations/me/integrations/portal-unico`
+
+Os estados são `not_configured`, `pending_test`, `connected`, `error` e
+`inactive`. A consulta de DUIMP só deve ser liberada no frontend quando
+`ready_for_duimp=true`.
+
+Para usar uma chave própria no cofre local, gere uma Fernet e mantenha o valor
+estável no `.env`:
+
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+```dotenv
+PORTAL_UNICO_LOCAL_SECRET_KEY=valor-gerado
+```
+
+Se essa chave ou a `SECRET_KEY` usada como fallback for alterada, as credenciais
+locais existentes não poderão ser descriptografadas. A camada de persistência é
+um `PortalCredentialStore`; em produção ela será substituída pelo Google Secret
+Manager sem alterar o contrato HTTP nem armazenar o segredo no banco.
 
 ### Certificado eCNPJ A1 no ambiente local
 

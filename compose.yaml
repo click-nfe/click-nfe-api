@@ -54,6 +54,7 @@ services:
       - "${API_PORT:-5000}:8080"
     volumes:
       - click_nfe_certificate_data:/app/data/certificates
+      - click_nfe_portal_unico_data:/app/data/portal-unico
     environment:
       <<: *api-environment
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
@@ -89,3 +90,4 @@ services:
 volumes:
   click_nfe_postgres_data:
   click_nfe_certificate_data:
+  click_nfe_portal_unico_data:

@@ -4,11 +4,13 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 import pytest
+from cryptography.fernet import Fernet
 
 from app.integrations.portal_unico import (
     DefaultPortalCredentialResolver,
     DuimpIdentifier,
     GcpSecretManagerPortalCredentialResolver,
+    LocalEncryptedFilePortalCredentialStore,
     PortalUnicoIntegrationError,
     PortalUnicoCredentials,
     PortalUnicoDuimpGateway,
@@ -138,8 +140,58 @@ def test_gcp_resolver_does_not_expose_secret_value_on_failure():
 def test_default_resolver_rejects_unknown_provider():
     resolver = DefaultPortalCredentialResolver()
 
-    with pytest.raises(PortalUnicoIntegrationError, match="env: ou gcp:"):
+    with pytest.raises(
+        PortalUnicoIntegrationError,
+        match="local:, env: ou gcp:",
+    ):
         resolver.resolve("database:PORTAL_UNICO", role_type="IMPEXP")
+
+
+def test_local_store_encrypts_resolves_and_deletes_credentials(tmp_path):
+    store = LocalEncryptedFilePortalCredentialStore(
+        root_dir=tmp_path,
+        encryption_key=Fernet.generate_key(),
+    )
+    credentials = PortalUnicoCredentials(
+        client_id="client-id-local",
+        client_secret="client-secret-local",
+    )
+
+    reference = store.store(
+        organization_id="7ec07ff4-d0f7-4f00-a8ad-279e1d1bbdcb",
+        credentials=credentials,
+    )
+
+    assert reference.startswith(
+        "local:7ec07ff4-d0f7-4f00-a8ad-279e1d1bbdcb/"
+    )
+    encrypted_files = list(tmp_path.rglob("*.enc"))
+    assert len(encrypted_files) == 1
+    encrypted = encrypted_files[0].read_bytes()
+    assert b"client-id-local" not in encrypted
+    assert b"client-secret-local" not in encrypted
+    resolved = store.resolve(reference, role_type="IMPEXP")
+    assert resolved == credentials
+
+    store.delete(reference)
+
+    assert list(tmp_path.rglob("*.enc")) == []
+
+
+def test_local_store_rejects_invalid_or_cross_directory_reference(tmp_path):
+    store = LocalEncryptedFilePortalCredentialStore(
+        root_dir=tmp_path,
+        encryption_key=Fernet.generate_key(),
+    )
+
+    with pytest.raises(
+        PortalUnicoIntegrationError,
+        match="referência local",
+    ):
+        store.resolve(
+            "local:../../etc/passwd",
+            role_type="IMPEXP",
+        )
 
 
 def test_gateway_authenticates_gets_current_version_and_paginates_items():

@@ -22,7 +22,7 @@ ENV PORT=8080
 
 RUN groupadd --system clicknfe \
     && useradd --system --gid clicknfe --home-dir /app clicknfe \
-    && mkdir -p /app/data/certificates \
+    && mkdir -p /app/data/certificates /app/data/portal-unico \
     && chown -R clicknfe:clicknfe /app/data
 
 WORKDIR /app
