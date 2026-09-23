@@ -73,6 +73,20 @@ class Config:
     CEP_CACHE_TTL_SECONDS = int(
         os.getenv("CEP_CACHE_TTL_SECONDS", "2592000")
     )
+    PORTAL_UNICO_CREDENTIAL_STORAGE_PROVIDER = os.getenv(
+        "PORTAL_UNICO_CREDENTIAL_STORAGE_PROVIDER",
+        "local_encrypted_file",
+    )
+    PORTAL_UNICO_LOCAL_SECRET_DIR = os.getenv(
+        "PORTAL_UNICO_LOCAL_SECRET_DIR",
+        "/app/data/portal-unico",
+    )
+    PORTAL_UNICO_LOCAL_SECRET_KEY = os.getenv(
+        "PORTAL_UNICO_LOCAL_SECRET_KEY"
+    )
+    PORTAL_UNICO_TIMEOUT_SECONDS = float(
+        os.getenv("PORTAL_UNICO_TIMEOUT_SECONDS", "30")
+    )
     NFE_CERTIFICATE_STORAGE_PROVIDER = os.getenv(
         "NFE_CERTIFICATE_STORAGE_PROVIDER",
         "local_encrypted_file",

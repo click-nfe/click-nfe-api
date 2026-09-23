@@ -3,12 +3,16 @@ from .client import (
     DuimpIdentifier,
     EnvironmentPortalCredentialResolver,
     GcpSecretManagerPortalCredentialResolver,
+    LocalEncryptedFilePortalCredentialStore,
+    PortalCredentialStore,
     PortalUnicoApiError,
     PortalUnicoCredentials,
     PortalUnicoDuimpGateway,
     PortalUnicoIntegrationError,
     PortalUnicoResponse,
     UrllibJsonTransport,
+    portal_credential_resolver_from_config,
+    portal_credential_store_from_config,
 )
 
 __all__ = [
@@ -16,10 +20,14 @@ __all__ = [
     "DuimpIdentifier",
     "EnvironmentPortalCredentialResolver",
     "GcpSecretManagerPortalCredentialResolver",
+    "LocalEncryptedFilePortalCredentialStore",
+    "PortalCredentialStore",
     "PortalUnicoApiError",
     "PortalUnicoCredentials",
     "PortalUnicoDuimpGateway",
     "PortalUnicoIntegrationError",
     "PortalUnicoResponse",
     "UrllibJsonTransport",
+    "portal_credential_resolver_from_config",
+    "portal_credential_store_from_config",
 ]

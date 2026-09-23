@@ -1,11 +1,12 @@
 from io import BytesIO
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from flask import Blueprint, Response, g, jsonify, request
+from flask import Blueprint, Response, current_app, g, jsonify, request
 from marshmallow import ValidationError
 
 from ..auth import auth_required
 from ..extensions import db
+from ..integrations.portal_unico import portal_credential_resolver_from_config
 from ..models.import_process import (
     DuimpSnapshot,
     ExternalAuthType,
@@ -63,7 +64,12 @@ nfe_xml_version_schema = NfeXmlVersionSchema()
 
 
 def _service() -> ImportNfeService:
-    return ImportNfeService(current_user=g.current_user)
+    return ImportNfeService(
+        current_user=g.current_user,
+        credential_resolver=portal_credential_resolver_from_config(
+            current_app.config
+        ),
+    )
 
 
 @import_process_bp.get("/metadata")
