@@ -65,6 +65,8 @@ class FiscalReferenceService:
         normalized_query = _search_text(query)
         eligible = []
         for row in rows:
+            if not _valid_country_code(row.bacen_code):
+                continue
             if row.valid_from and row.valid_from > active_on:
                 continue
             if row.valid_until and row.valid_until < active_on:
@@ -94,8 +96,13 @@ class FiscalReferenceService:
         rows = FiscalCountry.query.filter(FiscalCountry.active.is_(True)).all()
         normalized_iso = (iso_alpha_2 or "").strip().upper()
         normalized_code = (bacen_code or "").strip().zfill(4)
+        if not _valid_country_code(normalized_code):
+            normalized_code = ""
         normalized_name = _search_text(name)
+        normalized_name_short = _search_text((name or "").split(",", 1)[0])
         for row in rows:
+            if not _valid_country_code(row.bacen_code):
+                continue
             if row.valid_from and row.valid_from > reference_date:
                 continue
             if row.valid_until and row.valid_until < reference_date:
@@ -104,7 +111,11 @@ class FiscalReferenceService:
                 return row
             if normalized_code and row.bacen_code == normalized_code:
                 return row
-            if normalized_name and _search_text(row.name) == normalized_name:
+            row_name = _search_text(row.name)
+            if normalized_name and (
+                row_name == normalized_name
+                or (normalized_name_short and row_name == normalized_name_short)
+            ):
                 return row
         return None
 
@@ -172,7 +183,7 @@ class FiscalReferenceService:
         iso2 = str(
             cls._tabx_value(row, iso_field) or iso_alpha_2 or ""
         ).strip().upper()
-        if len(code) != 4 or not code.isdigit() or not name or len(iso2) != 2:
+        if not _valid_country_code(code) or not name or len(iso2) != 2:
             return None
 
         item = db.session.get(FiscalCountry, code)
@@ -210,3 +221,8 @@ class FiscalReferenceService:
             (value for key, value in row.items() if str(key).upper() == wanted),
             None,
         )
+
+
+def _valid_country_code(value: Any) -> bool:
+    code = str(value or "").strip()
+    return len(code) == 4 and code.isdigit() and code != "0000"

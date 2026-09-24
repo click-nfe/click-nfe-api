@@ -412,7 +412,9 @@ class NfeDraftAdditionalCostsSchema(Schema):
 class NfeDraftIcmsAdjustmentSchema(Schema):
     cst = fields.String(
         required=True,
-        validate=validate.OneOf(["00", "40", "41", "50", "51", "90"]),
+        validate=validate.OneOf(
+            ["00", "10", "20", "30", "40", "41", "50", "51", "60", "70", "90"]
+        ),
     )
     base = fields.Decimal(required=True, as_string=True, validate=validate.Range(min=0))
     rate = fields.Decimal(allow_none=True, as_string=True, validate=validate.Range(min=0, max=100))
@@ -471,7 +473,10 @@ class NfeForeignSupplierUpdateSchema(Schema):
     foreign_id = fields.String(allow_none=True, validate=validate.Length(max=20))
     country_code = fields.String(
         allow_none=True,
-        validate=validate.Length(min=1, max=4),
+        validate=validate.Regexp(
+            r"^(?!0000$)\d{4}$",
+            error="Informe um código BACEN válido com 4 dígitos.",
+        ),
     )
     country_name = fields.String(
         allow_none=True,
