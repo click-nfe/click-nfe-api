@@ -535,9 +535,9 @@ class NfeNumberSequenceSchema(SQLAlchemyAutoSchema):
     organization_id = fields.UUID(dump_only=True)
     client_id = fields.UUID(required=True)
 
-    environment = fields.String(
-        required=True,
-        validate=validate.OneOf(["homologation", "production"]),
+    environment = fields.Function(
+        lambda obj: getattr(obj.environment, "value", obj.environment),
+        dump_only=True,
     )
 
     model = fields.String(
@@ -550,9 +550,9 @@ class NfeNumberSequenceSchema(SQLAlchemyAutoSchema):
     initial_number = fields.Integer(load_default=1)
     max_number = fields.Integer(load_default=999999999)
 
-    status = fields.String(
-        load_default="active",
-        validate=validate.OneOf(["active", "inactive"]),
+    status = fields.Function(
+        lambda obj: getattr(obj.status, "value", obj.status),
+        dump_only=True,
     )
 
     last_reserved_number = fields.Integer(dump_only=True)
