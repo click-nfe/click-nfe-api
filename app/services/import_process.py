@@ -58,6 +58,7 @@ from app.services.fiscal_certificate import (
     FiscalCertificateError,
 )
 from app.services.fiscal_certificate_registry import FiscalCertificateRegistry
+from app.services.fiscal_reference import FiscalReferenceService
 from app.services.import_tax_calculator import ImportTaxCalculator
 from app.services.nfe_issuance_state import NfeIdempotency
 from app.services.nfe_context import NfeContextResolver
@@ -157,6 +158,8 @@ class ImportNfeService:
     DEFAULT_NFE_ENVIRONMENT = FiscalEnvironment.PRODUCTION.value
     DEFAULT_PROVIDER_ENVIRONMENT = FiscalEnvironment.PRODUCTION.value
     DEFAULT_NFE_SERIES = "1"
+    DEFAULT_TABX_CUSTOMS_UNIT_TABLE = "UNIDADE_ADUANEIRA"
+    DEFAULT_TABX_COUNTRY_TABLE = "PAIS"
 
     def __init__(
         self,
@@ -1868,6 +1871,14 @@ class ImportNfeService:
             snapshot.normalized_payload
             or self.normalize_duimp_payload(snapshot.raw_payload)
         )
+        previous_snapshot_id = str(snapshot.id)
+        preserved_overrides = self._operator_overrides_from_normalized(normalized)
+        refresh_state = {
+            "requested": bool(payload.get("refresh_external")),
+            "snapshot_changed": False,
+            "previous_snapshot_id": previous_snapshot_id,
+            "snapshot_id": previous_snapshot_id,
+        }
 
         external: dict[str, Any] = {"errors": []}
         connection_config: dict[str, Any] = {}
@@ -1890,6 +1901,72 @@ class ImportNfeService:
                     "provider_environment é obrigatório quando refresh_external=true."
                 )
             gateway = self._duimp_gateway_for(process=process, payload=payload)
+            refreshed_payload = self._read_external_context(
+                process=process,
+                endpoint_name="duimp.current_version.get",
+                request_payload={"duimp_number": process.duimp_number},
+                errors=external["errors"],
+                callback=lambda: gateway.fetch_duimp(
+                    duimp_number=normalized.get("number") or snapshot.duimp_number,
+                    enrich_catalog=True,
+                ),
+            )
+            if isinstance(refreshed_payload, dict):
+                refreshed_normalized = self.normalize_duimp_payload(
+                    refreshed_payload
+                )
+                refreshed_checksum = self._checksum(refreshed_payload)
+                if refreshed_checksum != snapshot.checksum:
+                    snapshot = self._create_duimp_snapshot(
+                        process=process,
+                        duimp_number=refreshed_normalized["number"],
+                        duimp_version=refreshed_normalized.get("version"),
+                        raw_payload=refreshed_payload,
+                        normalized_payload=refreshed_normalized,
+                        source_provider=ExternalProvider.PORTAL_UNICO.value,
+                    )
+                    refresh_state["snapshot_changed"] = True
+                normalized = refreshed_normalized
+                process.duimp_number = refreshed_normalized["number"]
+                process.duimp_version = refreshed_normalized.get("version")
+                process.status = ImportProcessStatus.DUIMP_FETCHED.value
+                process.updated_at = datetime.utcnow()
+                refresh_state["snapshot_id"] = str(snapshot.id)
+
+            customs_unit_code = normalized.get("clearance_location_code")
+            cached_unit = FiscalReferenceService.find_customs_unit(
+                customs_unit_code
+            )
+            if cached_unit:
+                external["cached_customs_unit"] = {
+                    "code": cached_unit.code,
+                    "description": cached_unit.description,
+                    "state": cached_unit.state,
+                    "municipality_code": cached_unit.municipality_code,
+                }
+
+            supplier = normalized.get("foreign_supplier") or {}
+            origin = normalized.get("country_of_origin") or {}
+            cached_country = FiscalReferenceService.find_country(
+                iso_alpha_2=(
+                    supplier.get("country_iso_alpha_2")
+                    or origin.get("iso_alpha_2")
+                ),
+                bacen_code=supplier.get("country_code"),
+                name=supplier.get("country_name"),
+                active_on=(
+                    self._date_value(normalized.get("registration_date"))
+                    or date.today()
+                ),
+            )
+            if cached_country:
+                external["cached_country"] = {
+                    "code": cached_country.bacen_code,
+                    "name": cached_country.name,
+                    "iso_alpha_2": cached_country.iso_alpha_2,
+                    "iso_alpha_3": cached_country.iso_alpha_3,
+                }
+
             cargo_identifier = self._cargo_identifier(normalized)
             if cargo_identifier:
                 external["cargo_knowledge"] = self._read_external_context(
@@ -1913,7 +1990,10 @@ class ImportNfeService:
             )
 
             customs_unit_code = normalized.get("clearance_location_code")
-            customs_table = connection_config.get("tabx_customs_unit_table")
+            customs_table = connection_config.get(
+                "tabx_customs_unit_table",
+                self.DEFAULT_TABX_CUSTOMS_UNIT_TABLE,
+            )
             if customs_table and customs_unit_code:
                 code_field = connection_config.get(
                     "tabx_customs_unit_code_field", "CODIGO"
@@ -1937,6 +2017,29 @@ class ImportNfeService:
                         ],
                     ),
                 )
+                if external.get("customs_unit"):
+                    cached_unit = FiscalReferenceService.cache_customs_unit_from_tabx(
+                        code=str(customs_unit_code),
+                        payload=external["customs_unit"],
+                        code_field=code_field,
+                        description_field=connection_config.get(
+                            "tabx_customs_unit_description_field", "NOME"
+                        ),
+                        state_field=connection_config.get(
+                            "tabx_customs_unit_state_field", "UF"
+                        ),
+                        municipality_field=connection_config.get(
+                            "tabx_customs_unit_municipality_field",
+                            "CODIGO_MUNICIPIO",
+                        ),
+                    )
+                    if cached_unit:
+                        external["cached_customs_unit"] = {
+                            "code": cached_unit.code,
+                            "description": cached_unit.description,
+                            "state": cached_unit.state,
+                            "municipality_code": cached_unit.municipality_code,
+                        }
 
             country_iso = (
                 (normalized.get("foreign_supplier") or {}).get(
@@ -1944,7 +2047,10 @@ class ImportNfeService:
                 )
                 or (normalized.get("country_of_origin") or {}).get("iso_alpha_2")
             )
-            country_table = connection_config.get("tabx_country_table")
+            country_table = connection_config.get(
+                "tabx_country_table",
+                self.DEFAULT_TABX_COUNTRY_TABLE,
+            )
             if country_table and country_iso:
                 iso_field = connection_config.get(
                     "tabx_country_iso_field", "SIGLA_ISO2"
@@ -1965,12 +2071,71 @@ class ImportNfeService:
                         ],
                     ),
                 )
+                if external.get("country"):
+                    cached_country = FiscalReferenceService.cache_country_from_tabx(
+                        iso_alpha_2=str(country_iso),
+                        payload=external["country"],
+                        code_field=connection_config.get(
+                            "tabx_country_code_field", "CODIGO"
+                        ),
+                        name_field=connection_config.get(
+                            "tabx_country_name_field", "NOME"
+                        ),
+                        iso_field=iso_field,
+                    )
+                    if cached_country:
+                        external["cached_country"] = {
+                            "code": cached_country.bacen_code,
+                            "name": cached_country.name,
+                            "iso_alpha_2": cached_country.iso_alpha_2,
+                            "iso_alpha_3": cached_country.iso_alpha_3,
+                        }
 
+        customs_unit_code = normalized.get("clearance_location_code")
+        if not external.get("cached_customs_unit"):
+            cached_unit = FiscalReferenceService.find_customs_unit(
+                customs_unit_code
+            )
+            if cached_unit:
+                external["cached_customs_unit"] = {
+                    "code": cached_unit.code,
+                    "description": cached_unit.description,
+                    "state": cached_unit.state,
+                    "municipality_code": cached_unit.municipality_code,
+                }
+
+        if not external.get("cached_country"):
+            supplier = normalized.get("foreign_supplier") or {}
+            origin = normalized.get("country_of_origin") or {}
+            cached_country = FiscalReferenceService.find_country(
+                iso_alpha_2=(
+                    supplier.get("country_iso_alpha_2")
+                    or origin.get("iso_alpha_2")
+                ),
+                bacen_code=supplier.get("country_code"),
+                name=supplier.get("country_name"),
+                active_on=(
+                    self._date_value(normalized.get("registration_date"))
+                    or date.today()
+                ),
+            )
+            if cached_country:
+                external["cached_country"] = {
+                    "code": cached_country.bacen_code,
+                    "name": cached_country.name,
+                    "iso_alpha_2": cached_country.iso_alpha_2,
+                    "iso_alpha_3": cached_country.iso_alpha_3,
+                }
+
+        effective_overrides = self._merge_defaults(
+            preserved_overrides,
+            payload.get("overrides"),
+        )
         context = self.nfe_context_resolver.resolve(
             normalized=normalized,
             external=external,
             connection_config=connection_config,
-            overrides=payload.get("overrides"),
+            overrides=effective_overrides,
         )
         fiscal_profile = self.get_importer_fiscal_profile_or_none(process.importer_id)
         rule = None
@@ -2009,6 +2174,7 @@ class ImportNfeService:
             {
                 "process_id": str(process.id),
                 "snapshot_id": str(snapshot.id),
+                "refresh": refresh_state,
                 "tax_rule": self._tax_rule_to_dict(rule) if rule else None,
                 "tax_rules": [
                     self._tax_rule_to_dict(item_rule)
@@ -2023,6 +2189,27 @@ class ImportNfeService:
             snapshot.normalized_payload = context["normalized"]
             db.session.flush()
         return context
+
+    @staticmethod
+    def _operator_overrides_from_normalized(
+        normalized: dict[str, Any],
+    ) -> dict[str, Any]:
+        sources = normalized.get("automation_field_sources") or {}
+        overrides: dict[str, Any] = {}
+        for field in NfeContextResolver.ALLOWED_OVERRIDES:
+            if sources.get(field) == "operator_override" and normalized.get(field) not in (None, ""):
+                overrides[field] = normalized[field]
+
+        supplier = normalized.get("foreign_supplier") or {}
+        supplier_overrides = {
+            field: supplier.get(field)
+            for field in ("name", "country_code", "country_name", "country_iso_alpha_2")
+            if sources.get(f"foreign_supplier.{field}") == "operator_override"
+            and supplier.get(field) not in (None, "")
+        }
+        if supplier_overrides:
+            overrides["foreign_supplier"] = supplier_overrides
+        return overrides
 
     def _snapshot_for_process(
         self,

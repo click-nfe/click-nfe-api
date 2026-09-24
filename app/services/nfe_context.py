@@ -9,27 +9,6 @@ from app.nfe_reference import NFE_TRANSPORT_MODE_CODES
 class NfeContextResolver:
     """Consolida fontes da NF-e sem transformar inferências em fatos fiscais."""
 
-    REFERENCE_CUSTOMS_UNITS = {
-        "0917900": {
-            "description": "TCP - TERMINAL",
-            "state": "PR",
-        },
-        "0927800": {
-            "description": "ALF/PORTO DE ITAJAI",
-            "state": "SC",
-        },
-    }
-    REFERENCE_COUNTRY_CODES = {
-        "DE": {
-            "code": "0230",
-            "name": "ALEMANHA",
-        },
-        "US": {
-            "code": "2496",
-            "name": "ESTADOS UNIDOS",
-        },
-    }
-
     REQUIRED_DUIMP_FIELDS = (
         "registration_date",
         "clearance_location",
@@ -89,23 +68,21 @@ class NfeContextResolver:
                 "portal_unico_tabx",
             )
         else:
-            reference_unit = self.REFERENCE_CUSTOMS_UNITS.get(
-                str(resolved.get("clearance_location_code") or "")
-            )
-            if reference_unit:
+            reference_unit = external.get("cached_customs_unit")
+            if isinstance(reference_unit, Mapping):
                 self._set_if_missing(
                     resolved,
                     sources,
                     "clearance_location",
-                    reference_unit["description"],
-                    "builtin_official_reference",
+                    reference_unit.get("description"),
+                    "local_fiscal_reference",
                 )
                 self._set_if_missing(
                     resolved,
                     sources,
                     "clearance_state",
-                    reference_unit["state"],
-                    "builtin_official_reference",
+                    reference_unit.get("state"),
+                    "local_fiscal_reference",
                 )
 
         knowledge = self._first_active_knowledge(external.get("cargo_knowledge"))
@@ -158,20 +135,18 @@ class NfeContextResolver:
                 "portal_unico_tabx" if tabx_country else "provider_configuration"
             )
         elif not supplier.get("country_code"):
-            reference_country = self.REFERENCE_COUNTRY_CODES.get(
-                str(country_iso or "").upper()
-            )
-            if reference_country:
-                supplier["country_code"] = reference_country["code"]
+            reference_country = external.get("cached_country")
+            if isinstance(reference_country, Mapping):
+                supplier["country_code"] = reference_country.get("code")
                 supplier.setdefault("country_iso_alpha_2", country_iso)
                 if not supplier.get("country_name"):
-                    supplier["country_name"] = reference_country["name"]
+                    supplier["country_name"] = reference_country.get("name")
                     sources["foreign_supplier.country_name"] = (
-                        "builtin_official_reference"
+                        "local_fiscal_reference"
                     )
                 resolved["foreign_supplier"] = supplier
                 sources["foreign_supplier.country_code"] = (
-                    "builtin_official_reference"
+                    "local_fiscal_reference"
                 )
         elif supplier != (resolved.get("foreign_supplier") or {}):
             resolved["foreign_supplier"] = supplier

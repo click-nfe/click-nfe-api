@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from uuid import UUID
 
 import jwt
@@ -6,7 +7,7 @@ import pytest
 
 from app import create_app
 from app.extensions import db
-from app.models import Client, NfeDraft, Organization, User
+from app.models import Client, DuimpSnapshot, NfeDraft, Organization, User
 from app.services.import_process import ImportNfeService
 from app.models.nfe_issuance import (
     NfeAttemptStatus,
@@ -541,6 +542,124 @@ def test_missing_tax_rule_does_not_block_duimp_preparation(api):
     body = workflow.get_json()
     assert body["prerequisites"]["has_active_tax_rule"] is False
     assert body["next_action"] == "configure_number_sequence"
+
+
+def test_context_refresh_creates_versioned_snapshot_and_reuses_official_cache(
+    api,
+    monkeypatch,
+):
+    client, headers, importer_id = api
+    process_response = client.post(
+        "/import-processes",
+        headers=headers,
+        json={
+            "importer_id": importer_id,
+            "reference_code": "TESTE-RECAPTURA-001",
+            "duimp_number": "26BR0000000000-1",
+            "source": "manual",
+        },
+    )
+    assert process_response.status_code == 201
+    process_id = process_response.get_json()["id"]
+
+    snapshot_response = client.post(
+        f"/import-processes/{process_id}/duimp-snapshots",
+        headers=headers,
+        json={
+            "duimp_number": "26BR0000000000-1",
+            "duimp_version": "1",
+            "raw_payload": {
+                "numero": "26BR0000000000-1",
+                "versao": "1",
+                "dataRegistro": "2026-09-20",
+                "itens": [],
+            },
+        },
+    )
+    assert snapshot_response.status_code == 201
+    original_snapshot_id = snapshot_response.get_json()["id"]
+
+    manual = client.post(
+        f"/import-processes/{process_id}/nfe-context/resolve",
+        headers=headers,
+        json={
+            "duimp_snapshot_id": original_snapshot_id,
+            "refresh_external": False,
+            "overrides": {"clearance_location": "AJUSTE DO OPERADOR"},
+        },
+    )
+    assert manual.status_code == 200
+
+    refreshed_payload = {
+        "provider": "portal_unico",
+        "numero": "26BR0000000000-1",
+        "versao": "2",
+        "dadosGerais": {
+            "identificacao": {
+                "numero": "26BR0000000000-1",
+                "versao": "2",
+                "dataRegistro": "2026-09-20T12:00:00",
+                "importador": {"ni": "00000000000191"},
+            },
+            "carga": {
+                "unidadeDeclarada": {"codigo": "0917900"},
+                "paisProcedencia": {"codigo": "CN", "descricao": "CHINA"},
+                "viaTransporteCodigo": "1",
+            },
+            "dataDesembaraco": "2026-09-23",
+        },
+        "itens": [],
+    }
+
+    class Gateway:
+        def fetch_duimp(self, **_kwargs):
+            return refreshed_payload
+
+        def fetch_icms_declaration(self, **_kwargs):
+            return {}
+
+        def fetch_comex_table(self, *, table_name, **_kwargs):
+            if table_name == "UNIDADE_ADUANEIRA":
+                return {
+                    "dados": [{"CODIGO": "0917900", "NOME": "PORTO DE PARANAGUA", "UF": "PR"}]
+                }
+            return {
+                "dados": [{"CODIGO": "1600", "NOME": "CHINA", "SIGLA_ISO2": "CN"}]
+            }
+
+    monkeypatch.setattr(
+        ImportNfeService,
+        "_find_provider_connection",
+        lambda *_args, **_kwargs: SimpleNamespace(config_json={}),
+    )
+    monkeypatch.setattr(
+        ImportNfeService,
+        "_duimp_gateway_for",
+        lambda *_args, **_kwargs: Gateway(),
+    )
+
+    refreshed = client.post(
+        f"/import-processes/{process_id}/nfe-context/resolve",
+        headers=headers,
+        json={
+            "duimp_snapshot_id": original_snapshot_id,
+            "refresh_external": True,
+            "overrides": {},
+        },
+    )
+    assert refreshed.status_code == 200, refreshed.get_json()
+    body = refreshed.get_json()
+    assert body["refresh"]["snapshot_changed"] is True
+    assert body["snapshot_id"] != original_snapshot_id
+    assert body["normalized"]["clearance_location"] == "AJUSTE DO OPERADOR"
+    assert body["normalized"]["clearance_state"] == "PR"
+    assert body["normalized"]["clearance_date"] == "2026-09-23"
+    assert body["normalized"]["foreign_supplier"]["country_code"] == "1600"
+    assert body["fields"]["clearance_location"]["source"] == "operator_override"
+
+    with client.application.app_context():
+        snapshots = DuimpSnapshot.query.filter_by(import_process_id=UUID(process_id)).all()
+        assert len(snapshots) == 2
 
 
 def test_api_uses_client_tax_rule_and_persisted_nfe_context(api):
