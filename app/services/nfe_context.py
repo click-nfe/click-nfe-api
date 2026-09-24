@@ -114,6 +114,12 @@ class NfeContextResolver:
         country_map = config.get("country_code_map") or {}
         country_code = country_map.get(str(country_iso or "").upper())
         supplier = deepcopy(resolved.get("foreign_supplier") or {})
+        if supplier.get("country_code") and not self._valid_country_code(
+            supplier.get("country_code")
+        ):
+            supplier["country_code"] = None
+            previous_sources.pop("foreign_supplier.country_code", None)
+            resolved["foreign_supplier"] = supplier
         tabx_country = self._first_tabx_row(external.get("country"))
         if tabx_country:
             country_code = country_code or self._tabx_value(
@@ -127,7 +133,7 @@ class NfeContextResolver:
             if country_name and not supplier.get("country_name"):
                 supplier["country_name"] = str(country_name)
                 sources["foreign_supplier.country_name"] = "portal_unico_tabx"
-        if country_code and not supplier.get("country_code"):
+        if self._valid_country_code(country_code) and not supplier.get("country_code"):
             supplier["country_code"] = str(country_code)
             supplier.setdefault("country_iso_alpha_2", country_iso)
             resolved["foreign_supplier"] = supplier
@@ -136,7 +142,9 @@ class NfeContextResolver:
             )
         elif not supplier.get("country_code"):
             reference_country = external.get("cached_country")
-            if isinstance(reference_country, Mapping):
+            if isinstance(reference_country, Mapping) and self._valid_country_code(
+                reference_country.get("code")
+            ):
                 supplier["country_code"] = reference_country.get("code")
                 supplier.setdefault("country_iso_alpha_2", country_iso)
                 if not supplier.get("country_name"):
@@ -164,6 +172,15 @@ class NfeContextResolver:
             if value not in (None, ""):
                 resolved[field] = value
                 sources[field] = "operator_override"
+
+        supplier = deepcopy(resolved.get("foreign_supplier") or {})
+        if supplier.get("country_code") and not self._valid_country_code(
+            supplier.get("country_code")
+        ):
+            supplier["country_code"] = None
+            resolved["foreign_supplier"] = supplier
+            sources.pop("foreign_supplier.country_code", None)
+            previous_sources.pop("foreign_supplier.country_code", None)
 
         transport_mode_code = resolved.get("transport_mode_code")
         if transport_mode_code not in (None, ""):
@@ -205,7 +222,7 @@ class NfeContextResolver:
             for field in self.REQUIRED_DUIMP_FIELDS
             if resolved.get(field) in (None, "")
         ]
-        if not supplier_country_code:
+        if not self._valid_country_code(supplier_country_code):
             missing.append("foreign_supplier.country_code")
         if not supplier_country_name:
             missing.append("foreign_supplier.country_name")
@@ -275,6 +292,11 @@ class NfeContextResolver:
                 "icms": fiscal_icms_reference
             },
         }
+
+    @staticmethod
+    def _valid_country_code(value: Any) -> bool:
+        code = str(value or "").strip()
+        return len(code) == 4 and code.isdigit() and code != "0000"
 
     @staticmethod
     def _set_if_missing(

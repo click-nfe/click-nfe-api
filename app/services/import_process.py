@@ -5495,6 +5495,14 @@ class ImportNfeService:
         }.items():
             if not address.get(field):
                 errors.append({"field": f"recipient.address.{field}", "message": message})
+        country_code = self._digits(address.get("country_code"))
+        if country_code and (len(country_code) != 4 or country_code == "0000"):
+            errors.append(
+                {
+                    "field": "recipient.address.country_code",
+                    "message": "Código BACEN do país deve conter 4 dígitos e não pode ser 0000.",
+                }
+            )
         if address.get("state") != "EX":
             errors.append(
                 {

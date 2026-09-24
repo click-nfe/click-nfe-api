@@ -228,6 +228,24 @@ def test_additional_costs_reallocate_and_refresh_reconciliation(api):
     assert payload["audit_trail"][-1]["section"] == "additional_costs"
 
 
+def test_draft_editor_rejects_zero_bacen_country_code(api):
+    client, headers, _, draft_id, _, _, _ = api
+    response = client.patch(
+        f"/nfe-drafts/{draft_id}",
+        headers=headers,
+        json={
+            "foreign_supplier": {
+                "country_code": "0000",
+                "country_name": "China, República Popular",
+            }
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "validation_error"
+    assert "country_code" in response.get_json()["messages"]["foreign_supplier"]
+
+
 def test_draft_removal_is_logical_and_reserved_number_is_archived(api):
     client, headers, process_id, draft_id, _, reserved_id, _ = api
     deleted = client.delete(

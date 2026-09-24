@@ -97,6 +97,61 @@ def test_context_resolver_keeps_unconfirmed_fields_missing():
     }
 
 
+def test_context_replaces_zero_country_code_with_official_cached_reference():
+    result = NfeContextResolver().resolve(
+        normalized={
+            "registration_date": "2026-09-14",
+            "clearance_location": "PORTO DE SANTOS",
+            "clearance_state": "SP",
+            "clearance_date": "2026-09-13",
+            "transport_mode_code": "1",
+            "foreign_supplier": {
+                "country_code": "0000",
+                "country_name": "China, República Popular",
+                "country_iso_alpha_2": "CN",
+            },
+            "automation_field_sources": {
+                "foreign_supplier.country_code": "local_fiscal_reference",
+            },
+        },
+        external={
+            "cached_country": {
+                "code": "1600",
+                "name": "CHINA",
+                "iso_alpha_2": "CN",
+            }
+        },
+    )
+
+    assert result["ready_for_draft"] is True
+    assert result["normalized"]["foreign_supplier"]["country_code"] == "1600"
+    assert result["fields"]["foreign_supplier.country_code"] == {
+        "value": "1600",
+        "source": "local_fiscal_reference",
+        "status": "resolved",
+    }
+
+
+def test_context_marks_zero_country_code_as_missing_without_reference():
+    result = NfeContextResolver().resolve(
+        normalized={
+            "registration_date": "2026-09-14",
+            "foreign_supplier": {
+                "country_code": "0000",
+                "country_name": "China, República Popular",
+            },
+        }
+    )
+
+    assert result["normalized"]["foreign_supplier"]["country_code"] is None
+    assert "foreign_supplier.country_code" in result["missing_fields"]
+    assert result["fields"]["foreign_supplier.country_code"] == {
+        "value": None,
+        "source": None,
+        "status": "missing",
+    }
+
+
 @pytest.mark.parametrize("transport_mode_code", NFE_TRANSPORT_MODES)
 def test_context_accepts_every_transport_mode_from_nfe_schema(
     transport_mode_code,

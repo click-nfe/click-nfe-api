@@ -267,3 +267,29 @@ def test_tabx_country_is_cached_for_name_and_iso_search(api):
         assert cached is not None
         assert cached.bacen_code == "2496"
         assert cached.name == "Estados Unidos"
+
+
+def test_country_reference_resolves_portal_name_alias_and_ignores_zero_code(api):
+    _client, _headers = api
+    from flask import current_app
+
+    with current_app.app_context():
+        db.session.add(
+            FiscalCountry(
+                bacen_code="0000",
+                iso_alpha_2=None,
+                iso_alpha_3=None,
+                name="China, República Popular",
+                active=True,
+                updated_at=datetime.utcnow(),
+            )
+        )
+        db.session.commit()
+
+        cached = FiscalReferenceService.find_country(
+            name="China, República Popular",
+            active_on=date(2026, 9, 14),
+        )
+
+        assert cached is not None
+        assert cached.bacen_code == "1600"
