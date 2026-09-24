@@ -1579,6 +1579,16 @@ def test_number_sequence_preserves_progress_and_rejects_regression(api):
         },
     )
     assert created.status_code == 200, created.get_json()
+    assert created.get_json()["environment"] == "production"
+    assert created.get_json()["status"] == "active"
+
+    listed = client.get(
+        f"/clients/{importer_id}/nfe-number-sequences",
+        headers=headers,
+    )
+    assert listed.status_code == 200, listed.get_json()
+    assert listed.get_json()[0]["environment"] == "production"
+    assert listed.get_json()[0]["status"] == "active"
 
     preserved = client.put(
         f"/clients/{importer_id}/nfe-number-sequences",
