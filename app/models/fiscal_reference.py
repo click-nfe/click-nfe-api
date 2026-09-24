@@ -54,6 +54,30 @@ class FiscalCountry(Base):
     )
 
 
+class FiscalCustomsUnit(Base):
+    """Unidade aduaneira resolvida por fonte oficial e reutilizada localmente."""
+
+    __tablename__ = "fiscal_customs_units"
+
+    code = Column(String(20), primary_key=True)
+    description = Column(String(255), nullable=False, index=True)
+    state = Column(String(2), nullable=False, index=True)
+    municipality_code = Column(String(7), nullable=True, index=True)
+    active = Column(Boolean, nullable=False, default=True, index=True)
+    source = Column(String(40), nullable=False, default="portal_unico_tabx")
+    fetched_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+    __table_args__ = (
+        Index("ix_fiscal_customs_units_state_description", "state", "description"),
+    )
+
+
 class PostalCodeCache(Base):
     """Endereço público normalizado e reutilizável por CEP."""
 

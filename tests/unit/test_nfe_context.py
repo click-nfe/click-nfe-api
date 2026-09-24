@@ -145,7 +145,19 @@ def test_context_uses_controlled_official_references_without_tabx():
             "clearance_date": "2026-05-27",
             "transport_mode_code": "4",
             "foreign_supplier": {"country_iso_alpha_2": "US"},
-        }
+        },
+        external={
+            "cached_customs_unit": {
+                "code": "0927800",
+                "description": "ALF/PORTO DE ITAJAI",
+                "state": "SC",
+            },
+            "cached_country": {
+                "code": "2496",
+                "name": "ESTADOS UNIDOS",
+                "iso_alpha_2": "US",
+            },
+        },
     )
 
     assert result["ready_for_draft"] is True
@@ -153,7 +165,7 @@ def test_context_uses_controlled_official_references_without_tabx():
     assert result["normalized"]["clearance_state"] == "SC"
     assert result["normalized"]["foreign_supplier"]["country_code"] == "2496"
     assert result["fields"]["clearance_location"]["source"] == (
-        "builtin_official_reference"
+        "local_fiscal_reference"
     )
 
 
@@ -169,7 +181,19 @@ def test_context_resolves_hafele_official_references_and_duimp_costs():
                 "taxa_utilizacao": {"value": "285.34"},
             },
             "foreign_supplier": {"country_iso_alpha_2": "DE"},
-        }
+        },
+        external={
+            "cached_customs_unit": {
+                "code": "0917900",
+                "description": "TCP - TERMINAL",
+                "state": "PR",
+            },
+            "cached_country": {
+                "code": "0230",
+                "name": "ALEMANHA",
+                "iso_alpha_2": "DE",
+            },
+        },
     )
 
     assert result["ready_for_draft"] is True

@@ -5,7 +5,14 @@ import pytest
 
 from app import create_app
 from app.extensions import db
-from app.models import FiscalCountry, FiscalMunicipality, Organization, User
+from app.models import (
+    FiscalCountry,
+    FiscalCustomsUnit,
+    FiscalMunicipality,
+    Organization,
+    User,
+)
+from app.services.fiscal_reference import FiscalReferenceService
 
 
 class TestConfig:
@@ -203,3 +210,60 @@ def test_country_search_rejects_invalid_active_on(api):
 
     assert response.status_code == 400
     assert response.get_json()["error"] == "validation_error"
+
+
+def test_tabx_customs_unit_is_cached_and_reused(api):
+    _client, _headers = api
+    from flask import current_app
+
+    with current_app.app_context():
+        item = FiscalReferenceService.cache_customs_unit_from_tabx(
+            code="0927800",
+            payload={
+                "dados": [
+                    {
+                        "campos": [
+                            {"nome": "CODIGO", "valor": "0927800"},
+                            {"nome": "NOME", "valor": "ALF/PORTO DE ITAJAI"},
+                            {"nome": "UF", "valor": "SC"},
+                            {"nome": "CODIGO_MUNICIPIO", "valor": "4208203"},
+                        ]
+                    }
+                ]
+            },
+        )
+        db.session.commit()
+
+        cached = FiscalReferenceService.find_customs_unit("0927800")
+        assert cached is not None
+        assert cached.description == "ALF/PORTO DE ITAJAI"
+        assert cached.state == "SC"
+        assert cached.municipality_code == "4208203"
+        assert FiscalCustomsUnit.query.count() == 1
+
+
+def test_tabx_country_is_cached_for_name_and_iso_search(api):
+    _client, _headers = api
+    from flask import current_app
+
+    with current_app.app_context():
+        FiscalReferenceService.cache_country_from_tabx(
+            iso_alpha_2="US",
+            payload={
+                "dados": [
+                    {
+                        "campos": [
+                            {"nome": "CODIGO", "valor": "2496"},
+                            {"nome": "NOME", "valor": "Estados Unidos"},
+                            {"nome": "SIGLA_ISO2", "valor": "US"},
+                        ]
+                    }
+                ]
+            },
+        )
+        db.session.commit()
+
+        cached = FiscalReferenceService.find_country(iso_alpha_2="US")
+        assert cached is not None
+        assert cached.bacen_code == "2496"
+        assert cached.name == "Estados Unidos"
