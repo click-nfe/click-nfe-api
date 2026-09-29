@@ -162,11 +162,44 @@ docker compose run --rm migrate
 docker compose exec api flask --app wsgi.py db current
 ```
 
-O resultado esperado de `db current` é:
+Após esta atualização, o resultado esperado de `db current` é:
 
 ```text
-8c964dc2a0e2 (head)
+d3c9f7a21e84 (head)
 ```
+
+### Catálogo de países NF-e
+
+A revisão `d3c9f7a21e84` inclui um snapshot versionado de **253 códigos BACEN**
+em `migrations/data/fiscal_countries_2026-09-29.csv`. A carga acontece durante
+`db upgrade`, sem consulta externa no momento da migration. Registros existentes
+são reconciliados pelo código: nome e estado ativo acompanham o snapshot, e os
+campos ISO e as vigências existentes são preservados. Outros códigos, como o
+sentinela inválido `0000`, não são alterados. A migration não desativa códigos
+ausentes do snapshot; o downgrade preserva os dados fiscais.
+
+Fonte: [Tabela de Países da NF-e, NT 2018.003 v1.01](http://www.nfe.fazenda.gov.br/portal/exibirArquivo.aspx?conteudo=PfPDd6dW200=),
+normalizada no [catálogo aberto br-validators](https://github.com/open-data-brazil/br-validators/tree/main/packages/br-validators/src/paises-bacen/data)
+(captura de 29/09/2026). O snapshot inclui código e nome; valores ISO e datas de
+vigência não foram inferidos. Para atualizar o catálogo posteriormente, revise a
+fonte oficial e publique uma nova migration. O comando manual
+`flask --app wsgi.py fiscal-reference import-countries ARQUIVO.csv` permanece
+disponível para uma importação controlada.
+
+Após o `git pull`, em PowerShell, execute:
+
+```powershell
+docker compose run --build --rm migrate
+docker compose up --build -d api
+docker compose exec api flask --app wsgi.py db current
+docker compose exec postgres psql -U click_nfe -d click_nfe -c "SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE active) AS ativos FROM fiscal_countries;"
+docker compose exec postgres psql -U click_nfe -d click_nfe -c "SELECT bacen_code, name, active FROM fiscal_countries WHERE bacen_code IN ('1058', '1600');"
+```
+
+Se `POSTGRES_USER` ou `POSTGRES_DB` foram alterados no `.env`, substitua
+`click_nfe` nos dois últimos comandos. O total será pelo menos 253 se já havia
+outros códigos no banco; Brasil (`1058`) e China (`1600`) devem estar ativos.
+O catálogo de municípios usa outra fonte e não é preenchido nesta revisão.
 
 ### Bootstrap fora do container
 
