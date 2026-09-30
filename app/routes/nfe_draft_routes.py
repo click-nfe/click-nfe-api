@@ -21,6 +21,7 @@ from ..services.fiscal_certificate import (
 )
 from ..services.import_process import ImportNfeService
 from ..services.nfe_xml_signer import NfeXmlSignatureError, NfeXmlSigner
+from ..services.nfe_danfe_preview import DanfePreviewError, render_danfe_preview
 from ..services.nfe_xsd_validator import (
     NfeXsdConfigurationError,
     NfeXsdValidator,
@@ -325,6 +326,32 @@ def download_nfe_xml_version(draft_id: str, xml_version_id: str):
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
             "X-NFe-Xml-Version": str(xml_version.version_number),
+        },
+    )
+
+
+@nfe_draft_bp.get("/<draft_id>/xml-versions/<xml_version_id>/danfe-preview")
+@auth_required
+def download_danfe_preview(draft_id: str, xml_version_id: str):
+    _, _, xml_version = _draft_and_xml_version(draft_id, xml_version_id)
+    xml_type = getattr(xml_version.xml_type, "value", xml_version.xml_type)
+    if str(xml_type).lower() != "signed" or xml_version.xsd_valid is not True:
+        return bad_request_response(
+            ValueError("A prévia em PDF exige um XML assinado e válido no XSD.")
+        )
+    try:
+        pdf = render_danfe_preview(xml_version.xml_content)
+    except DanfePreviewError as exc:
+        return bad_request_response(exc)
+    identifier = xml_version.access_key or str(xml_version.id)
+    return Response(
+        pdf,
+        content_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="Previa-DANFE-{identifier}.pdf"'
+            ),
+            "Cache-Control": "no-store",
         },
     )
 

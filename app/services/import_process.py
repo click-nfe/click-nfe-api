@@ -3007,6 +3007,10 @@ class ImportNfeService:
                     "xsd_valid"
                 ) is True
             ),
+            "signed_count": sum(
+                1 for document in documents
+                if (document["draft"] or {}).get("signed_xml")
+            ),
         }
         progress["all_drafts_created"] = bool(documents) and (
             progress["drafts_count"] == progress["documents_count"]
@@ -3016,6 +3020,9 @@ class ImportNfeService:
         )
         progress["all_xmls_valid"] = bool(documents) and (
             progress["xsd_valid_count"] == progress["documents_count"]
+        )
+        progress["all_signed"] = bool(documents) and (
+            progress["signed_count"] == progress["documents_count"]
         )
         return {
             "id": str(plan.id),
@@ -3077,6 +3084,14 @@ class ImportNfeService:
                 .order_by(NfeXmlVersion.version_number.desc())
                 .first()
             )
+            signed_xml = (
+                NfeXmlVersion.query.filter(
+                    NfeXmlVersion.nfe_draft_id == latest_draft.id,
+                    NfeXmlVersion.xml_type == NfeXmlType.SIGNED.value,
+                )
+                .order_by(NfeXmlVersion.version_number.desc())
+                .first()
+            )
             if latest_xml and latest_xml.xsd_valid is True:
                 derived_status = "xsd_validated"
             elif latest_xml and latest_xml.xsd_valid is False:
@@ -3105,6 +3120,17 @@ class ImportNfeService:
                         "generated_at": self._iso(latest_xml.generated_at),
                     }
                     if latest_xml
+                    else None
+                ),
+                "signed_xml": (
+                    {
+                        "id": str(signed_xml.id),
+                        "version_number": signed_xml.version_number,
+                        "xml_type": self._enum_value(signed_xml.xml_type),
+                        "xsd_valid": signed_xml.xsd_valid,
+                        "generated_at": self._iso(signed_xml.generated_at),
+                    }
+                    if signed_xml
                     else None
                 ),
                 "created_at": self._iso(latest_draft.created_at),
