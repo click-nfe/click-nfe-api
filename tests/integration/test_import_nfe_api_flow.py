@@ -213,6 +213,11 @@ def test_api_flow_from_manual_duimp_snapshot_to_unsigned_xml(api):
         f"NFe-{xml_body['access_key']}-unsigned-v1.xml"
         in download_response.headers["Content-Disposition"]
     )
+    unsigned_preview = client.get(
+        f"/nfe-drafts/{draft_id}/xml-versions/{xml_version_id}/danfe-preview",
+        headers=headers,
+    )
+    assert unsigned_preview.status_code == 400
 
     xsd_response = client.post(
         f"/nfe-drafts/{draft_id}/xml-versions/{xml_version_id}/validate-xsd",
@@ -414,6 +419,16 @@ def test_api_flow_from_manual_duimp_snapshot_to_unsigned_xml(api):
         f"NFe-{xml_body['access_key']}-signed-v2.xml"
         in signed_download.headers["Content-Disposition"]
     )
+    preview = client.get(
+        f"/nfe-drafts/{draft_id}/xml-versions/{signed_version_id}/danfe-preview",
+        headers=headers,
+    )
+    assert preview.status_code == 200
+    assert preview.content_type == "application/pdf"
+    assert preview.data.startswith(b"%PDF-")
+    assert len(preview.data) > 2000
+    assert f"Previa-DANFE-{xml_body['access_key']}.pdf" in preview.headers["Content-Disposition"]
+    assert preview.headers["Cache-Control"] == "no-store"
 
     process_after_signature = client.get(
         f"/import-processes/{process_id}",
