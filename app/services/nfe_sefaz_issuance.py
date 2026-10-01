@@ -203,7 +203,7 @@ class SefazIssuanceService:
                 db.session.add(NfeXmlVersion(
                     nfe_draft_id=draft.id, version_number=xml.version_number,
                     xml_type=NfeXmlType.AUTHORIZED.value, xml_content=content,
-                    xsd_valid=True, xsd_errors=[], access_key=issuance.access_key,
+                    xsd_valid=None, xsd_errors=None, access_key=issuance.access_key,
                     protocol_number=reply.protocol, generated_at=datetime.utcnow(),
                     generated_by_user_id=self.drafts.user_id,
                 ))
