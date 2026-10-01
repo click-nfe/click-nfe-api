@@ -22,6 +22,8 @@ from ..services.fiscal_certificate import (
 from ..services.import_process import ImportNfeService
 from ..services.nfe_xml_signer import NfeXmlSignatureError, NfeXmlSigner
 from ..services.nfe_danfe_preview import DanfePreviewError, render_danfe_preview
+from ..services.nfe_sefaz import SefazClient, SefazConfigurationError, SefazTransportError
+from ..services.nfe_sefaz_issuance import SefazIssuanceService
 from ..services.nfe_xsd_validator import (
     NfeXsdConfigurationError,
     NfeXsdValidator,
@@ -69,6 +71,65 @@ def _draft_and_xml_version(draft_id: str, xml_version_id: str):
         nfe_draft_id=draft.id,
     ).first_or_404()
     return service, draft, xml_version
+
+
+def _sefaz_service():
+    config = current_app.config
+    return SefazIssuanceService(
+        _service(), config.get("NFE_SEFAZ_CLIENT") or SefazClient.from_config(config),
+        enabled=config.get("NFE_SEFAZ_TRANSMISSION_ENABLED", False),
+    )
+
+
+@nfe_draft_bp.get("/<draft_id>/sefaz")
+@auth_required
+def get_sefaz_status(draft_id: str):
+    service = _sefaz_service()
+    draft = service.drafts.nfe_draft_query_for_current_user().filter_by(id=uuid_or_404(draft_id)).first_or_404()
+    return jsonify(service.status(draft))
+
+
+@nfe_draft_bp.post("/<draft_id>/sefaz/transmit")
+@admin_required
+def transmit_sefaz(draft_id: str):
+    service = _sefaz_service()
+    draft = service.drafts.nfe_draft_query_for_current_user().filter_by(id=uuid_or_404(draft_id)).first_or_404()
+    try:
+        return jsonify(service.transmit(draft))
+    except SefazTransportError as exc:
+        return jsonify({"error": "sefaz_outcome_unknown", "message": str(exc), "status": service.status(draft)}), 503
+    except (SefazConfigurationError, FiscalCertificateError, NfeXmlSignatureError, ValueError) as exc:
+        db.session.rollback()
+        return bad_request_response(exc)
+
+
+@nfe_draft_bp.post("/<draft_id>/sefaz/reconcile")
+@admin_required
+def reconcile_sefaz(draft_id: str):
+    service = _sefaz_service()
+    draft = service.drafts.nfe_draft_query_for_current_user().filter_by(id=uuid_or_404(draft_id)).first_or_404()
+    try:
+        return jsonify(service.reconcile(draft))
+    except SefazTransportError as exc:
+        return jsonify({"error": "sefaz_query_failed", "message": str(exc), "status": service.status(draft)}), 503
+    except (SefazConfigurationError, FiscalCertificateError, ValueError) as exc:
+        db.session.rollback()
+        return bad_request_response(exc)
+
+
+@nfe_draft_bp.get("/<draft_id>/sefaz/authorized-xml")
+@auth_required
+def download_authorized_nfe(draft_id: str):
+    service = _sefaz_service()
+    draft = service.drafts.nfe_draft_query_for_current_user().filter_by(id=uuid_or_404(draft_id)).first_or_404()
+    status = service.status(draft)
+    if status["status"] != "authorized" or not status["authorized_xml_version_id"]:
+        return bad_request_response(ValueError("NF-e ainda não autorizada."))
+    xml = NfeXmlVersion.query.filter_by(id=uuid_or_404(status["authorized_xml_version_id"]), nfe_draft_id=draft.id).first_or_404()
+    return Response(xml.xml_content, content_type="application/xml; charset=utf-8", headers={
+        "Content-Disposition": f'attachment; filename="NFe-{xml.access_key}-autorizada.xml"',
+        "Cache-Control": "no-store",
+    })
 
 
 @nfe_draft_bp.get("/<draft_id>")

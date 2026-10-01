@@ -461,6 +461,57 @@ def test_api_flow_from_manual_duimp_snapshot_to_unsigned_xml(api):
         assert "certificate_ref" not in events[0].event_metadata
         assert "password_ref" not in events[0].event_metadata
 
+    # No network call can occur while the production switch is disabled.
+    disabled = client.post(f"/nfe-drafts/{draft_id}/sefaz/transmit", headers=headers)
+    assert disabled.status_code == 400
+
+    from app.services.nfe_sefaz import NS, SefazReply, SefazTransportError
+
+    key = xml_body["access_key"]
+    protocol_xml = (
+        f'<protNFe xmlns="{NS}" versao="4.00"><infProt>'
+        f'<tpAmb>1</tpAmb><verAplic>TEST</verAplic><chNFe>{key}</chNFe>'
+        '<dhRecbto>2026-09-30T12:00:00-03:00</dhRecbto><nProt>141260000000001</nProt>'
+        '<digVal>TEST</digVal><cStat>100</cStat><xMotivo>Autorizado o uso da NF-e</xMotivo>'
+        '</infProt></protNFe>'
+    )
+
+    class FakeSefaz:
+        posts = 0
+        queries = 0
+
+        def endpoint(self, state, operation):
+            assert state == "41"
+            return f"https://sefaz.example.invalid/{operation}"
+
+        def authorize(self, signed_xml, material):
+            self.posts += 1
+            assert key in signed_xml and material.pkcs12_bytes
+            raise SefazTransportError("Resultado incerto")
+
+        def query_protocol(self, queried_key, state, material):
+            self.queries += 1
+            assert queried_key == key and state == "41"
+            return SefazReply(code="100", message="Autorizado", protocol="141260000000001",
+                              access_key=key, environment="1", protocol_xml=protocol_xml)
+
+    fake = FakeSefaz()
+    client.application.config.update(NFE_SEFAZ_TRANSMISSION_ENABLED=True, NFE_SEFAZ_CLIENT=fake)
+    uncertain = client.post(f"/nfe-drafts/{draft_id}/sefaz/transmit", headers=headers)
+    assert uncertain.status_code == 503, uncertain.get_json()
+    assert uncertain.get_json()["status"]["status"] == "processing"
+    duplicate = client.post(f"/nfe-drafts/{draft_id}/sefaz/transmit", headers=headers)
+    assert duplicate.status_code == 400
+    assert fake.posts == 1
+    reconciled = client.post(f"/nfe-drafts/{draft_id}/sefaz/reconcile", headers=headers)
+    assert reconciled.status_code == 200, reconciled.get_json()
+    assert reconciled.get_json()["status"] == "authorized"
+    assert reconciled.get_json()["protocol_number"] == "141260000000001"
+    assert fake.queries == 1
+    authorized = client.get(f"/nfe-drafts/{draft_id}/sefaz/authorized-xml", headers=headers)
+    assert authorized.status_code == 200
+    assert b"nfeProc" in authorized.data and b"protNFe" in authorized.data
+
 
 def test_tax_rule_conflict_is_rejected_and_diagnosed(api):
     client, headers, importer_id = api
