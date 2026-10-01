@@ -1,11 +1,21 @@
 import pytest
+from types import SimpleNamespace
 
 from app.services.nfe_sefaz import NS, SefazClient, SefazTransportError, parse_reply
+from app.services.nfe_sefaz_issuance import SefazIssuanceService
 from tests.helpers import certificate_material
 from lxml import etree
 
 
 KEY = "41" + "1" * 42
+
+
+def test_status_guidance_for_duplicate_outage_and_rejection():
+    guide = SefazIssuanceService._next_action
+    pending = SimpleNamespace(status="processing")
+    assert "duplicidade" in guide(pending, SimpleNamespace(response_code="204"))
+    assert "indisponível" in guide(pending, SimpleNamespace(response_code="109"))
+    assert "não será reenviada" in guide(SimpleNamespace(status="rejected"), SimpleNamespace(response_code="539"))
 
 
 def reply(code, protocol=""):

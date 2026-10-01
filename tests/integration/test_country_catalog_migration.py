@@ -27,7 +27,7 @@ def test_country_migration_seeds_and_preserves_existing_metadata(tmp_path):
         ))
         db.session.commit()
 
-        upgrade()
+        upgrade(revision="d3c9f7a21e84")
         assert db.session.query(FiscalCountry).count() == 253
         assert db.session.get(FiscalCountry, "1058").name == "BRASIL"
         china = db.session.get(FiscalCountry, "1600")
@@ -43,6 +43,6 @@ def test_country_migration_seeds_and_preserves_existing_metadata(tmp_path):
 
         # A data-only downgrade leaves pre-existing and referenced rows intact.
         downgrade(revision="c8f4d1e7a2b9")
-        upgrade()
+        upgrade(revision="d3c9f7a21e84")
         assert db.session.query(FiscalCountry).count() == 253
         assert db.session.get(FiscalCountry, "1600").iso_alpha_2 == "CN"
