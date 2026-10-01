@@ -464,6 +464,7 @@ def test_api_flow_from_manual_duimp_snapshot_to_unsigned_xml(api):
     # No network call can occur while the production switch is disabled.
     disabled = client.post(f"/nfe-drafts/{draft_id}/sefaz/transmit", headers=headers)
     assert disabled.status_code == 400
+    assert client.get(f"/nfe-drafts/{draft_id}/sefaz/danfe", headers=headers).status_code == 400
 
     from app.services.nfe_sefaz import NS, SefazReply, SefazTransportError
 
@@ -511,6 +512,12 @@ def test_api_flow_from_manual_duimp_snapshot_to_unsigned_xml(api):
     authorized = client.get(f"/nfe-drafts/{draft_id}/sefaz/authorized-xml", headers=headers)
     assert authorized.status_code == 200
     assert b"nfeProc" in authorized.data and b"protNFe" in authorized.data
+    danfe = client.get(f"/nfe-drafts/{draft_id}/sefaz/danfe", headers=headers)
+    assert danfe.status_code == 200, danfe.get_json() if danfe.is_json else ""
+    assert danfe.content_type == "application/pdf"
+    assert danfe.data.startswith(b"%PDF-")
+    assert f"DANFE-{key}.pdf" in danfe.headers["Content-Disposition"]
+    assert danfe.headers["Cache-Control"] == "no-store"
 
 
 def test_tax_rule_conflict_is_rejected_and_diagnosed(api):

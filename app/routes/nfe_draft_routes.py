@@ -22,6 +22,7 @@ from ..services.fiscal_certificate import (
 from ..services.import_process import ImportNfeService
 from ..services.nfe_xml_signer import NfeXmlSignatureError, NfeXmlSigner
 from ..services.nfe_danfe_preview import DanfePreviewError, render_danfe_preview
+from ..services.nfe_danfe import DanfeError, render_authorized_danfe
 from ..services.nfe_sefaz import SefazClient, SefazConfigurationError, SefazTransportError
 from ..services.nfe_sefaz_issuance import SefazIssuanceService
 from ..services.nfe_xsd_validator import (
@@ -129,6 +130,31 @@ def download_authorized_nfe(draft_id: str):
     return Response(xml.xml_content, content_type="application/xml; charset=utf-8", headers={
         "Content-Disposition": f'attachment; filename="NFe-{xml.access_key}-autorizada.xml"',
         "Cache-Control": "no-store",
+    })
+
+
+@nfe_draft_bp.get("/<draft_id>/sefaz/danfe")
+@auth_required
+def download_authorized_danfe(draft_id: str):
+    service = _sefaz_service()
+    draft = service.drafts.nfe_draft_query_for_current_user().filter_by(id=uuid_or_404(draft_id)).first_or_404()
+    status = service.status(draft)
+    if status["status"] != "authorized" or not status["authorized_xml_version_id"]:
+        return bad_request_response(ValueError("O DANFE exige NF-e autorizada pela SEFAZ."))
+    xml = NfeXmlVersion.query.filter_by(
+        id=uuid_or_404(status["authorized_xml_version_id"]), nfe_draft_id=draft.id,
+    ).first_or_404()
+    try:
+        pdf = render_authorized_danfe(
+            xml.xml_content, expected_key=status["access_key"],
+            expected_protocol=status["protocol_number"],
+        )
+    except DanfeError as exc:
+        return bad_request_response(exc)
+    return Response(pdf, content_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="DANFE-{xml.access_key}.pdf"',
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
     })
 
 
