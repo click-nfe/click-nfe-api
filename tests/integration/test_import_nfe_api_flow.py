@@ -15,6 +15,7 @@ from app.models.nfe_issuance import (
     NfeIssuanceAttempt,
     NfeIssuanceEvent,
 )
+from app.models.sefaz_endpoint import SefazEndpoint
 from tests.helpers import StaticCertificateVault, certificate_material
 
 
@@ -72,6 +73,34 @@ def api():
         yield app.test_client(), {"Authorization": f"Bearer {token}"}, str(client.id)
         db.session.remove()
         db.drop_all()
+
+
+def test_sefaz_production_catalog_resolves_all_states_without_env_configuration(api):
+    from migrations.versions.e62a7b9c104d_seed_sefaz_endpoints import _load_catalog
+    from app.services.nfe_sefaz import SefazClient, SefazConfigurationError
+
+    rows = _load_catalog()
+    assert len(rows) == 27
+    assert next(row for row in rows if row["uf"] == "SP")["authorizer"] == "SP"
+    assert next(row for row in rows if row["uf"] == "CE")["authorizer"] == "SVRS"
+    assert next(row for row in rows if row["uf"] == "MA")["authorizer"] == "SVAN"
+    with api[0].application.app_context():
+        db.session.add_all([SefazEndpoint(
+            cuf=row["cuf"], uf=row["uf"], authorizer=row["authorizer"],
+            authorization_url=row["authorization_url"], receipt_url=row["receipt_url"],
+            protocol_url=row["protocol_url"], active=True, updated_at=datetime.utcnow(),
+        ) for row in rows])
+        db.session.commit()
+        client = SefazClient.from_config({})
+        assert len(client.endpoints) == 27
+        assert client.endpoint("35", "authorization").endswith("nfeautorizacao4.asmx")
+        assert client.endpoint("23", "receipt") == client.endpoint("12", "receipt")
+        assert client.endpoint("21", "protocol").startswith("https://www.sefazvirtual.fazenda.gov.br/")
+
+        db.session.query(SefazEndpoint).filter_by(cuf="35").update({"active": False})
+        db.session.commit()
+        with pytest.raises(SefazConfigurationError):
+            SefazClient.from_config({"NFE_SEFAZ_PRODUCTION_ENDPOINTS_JSON": '{"35":{"authorization":"https://example.invalid"}}'})
 
 
 def test_api_flow_from_manual_duimp_snapshot_to_unsigned_xml(api):
@@ -501,6 +530,7 @@ def test_api_flow_from_manual_duimp_snapshot_to_unsigned_xml(api):
     uncertain = client.post(f"/nfe-drafts/{draft_id}/sefaz/transmit", headers=headers)
     assert uncertain.status_code == 503, uncertain.get_json()
     assert uncertain.get_json()["status"]["status"] == "processing"
+    assert "não retransmita" in uncertain.get_json()["status"]["next_action"]
     duplicate = client.post(f"/nfe-drafts/{draft_id}/sefaz/transmit", headers=headers)
     assert duplicate.status_code == 400
     assert fake.posts == 1
@@ -508,6 +538,8 @@ def test_api_flow_from_manual_duimp_snapshot_to_unsigned_xml(api):
     assert reconciled.status_code == 200, reconciled.get_json()
     assert reconciled.get_json()["status"] == "authorized"
     assert reconciled.get_json()["protocol_number"] == "141260000000001"
+    assert reconciled.get_json()["last_response_code"] == "100"
+    assert "XML autorizado" in reconciled.get_json()["next_action"]
     assert fake.queries == 1
     authorized = client.get(f"/nfe-drafts/{draft_id}/sefaz/authorized-xml", headers=headers)
     assert authorized.status_code == 200

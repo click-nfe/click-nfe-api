@@ -40,6 +40,7 @@ class SefazIssuanceService:
         authorized = NfeXmlVersion.query.filter_by(
             nfe_draft_id=draft.id, xml_type=NfeXmlType.AUTHORIZED.value,
         ).order_by(NfeXmlVersion.version_number.desc()).first()
+        latest = attempts[0] if attempts else None
         return {
             "id": str(issuance.id), "status": issuance.status,
             "enabled": self.enabled, "access_key": issuance.access_key,
@@ -48,6 +49,9 @@ class SefazIssuanceService:
             "rejection_code": issuance.rejection_code,
             "rejection_reason": issuance.rejection_reason,
             "last_error": issuance.last_error_message,
+            "last_response_code": latest.response_code if latest else None,
+            "last_response_message": latest.response_message if latest else None,
+            "next_action": self._next_action(issuance, latest),
             "authorized_xml_version_id": str(authorized.id) if authorized else None,
             "attempts": [{
                 "operation": str(getattr(a.operation, "value", a.operation)),
@@ -56,6 +60,27 @@ class SefazIssuanceService:
                 "started_at": a.started_at.isoformat(),
             } for a in attempts],
         }
+
+    @staticmethod
+    def _next_action(issuance, latest):
+        code = latest.response_code if latest else None
+        if issuance.status == "authorized":
+            return "Autorização confirmada. Baixe e guarde o XML autorizado e o DANFE."
+        if issuance.status == "denied":
+            return "Uso denegado: encaminhe o motivo retornado pela SEFAZ ao responsável fiscal. Não reenvie esta chave."
+        if issuance.status == "rejected":
+            return "Confira o código e o motivo da rejeição com o responsável fiscal. Corrija os dados antes de gerar e assinar uma nova versão; esta chave não será reenviada automaticamente."
+        if issuance.status in {"submission_pending", "submitted", "processing"}:
+            if code == "204":
+                return "A SEFAZ informou duplicidade. Aguarde a consulta pela chave e confira se já existe autorização; não transmita outra vez."
+            if code in {"108", "109"}:
+                return "Serviço da SEFAZ indisponível. Aguarde o restabelecimento e consulte o recibo ou a chave; não retransmita."
+            if code == "217":
+                return "A chave ainda não consta na consulta. Aguarde o processamento e consulte novamente; o envio anterior pode ter sido recebido."
+            return "Aguarde a consulta automática pelo recibo ou pela chave. Se persistir, use Consultar resultado; não retransmita."
+        if issuance.status == "signed":
+            return "Confira os dados fiscais antes de transmitir em produção."
+        return None
 
     def _material(self, issuance):
         cert = issuance.certificate

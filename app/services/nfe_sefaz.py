@@ -120,13 +120,32 @@ class SefazClient:
 
     @classmethod
     def from_config(cls, config):
+        from app.models.sefaz_endpoint import SefazEndpoint
+
+        endpoints = {
+            row.cuf: {
+                "authorization": row.authorization_url,
+                "receipt": row.receipt_url,
+                "protocol": row.protocol_url,
+            }
+            for row in SefazEndpoint.query.filter_by(active=True).all()
+        }
         raw = config.get("NFE_SEFAZ_PRODUCTION_ENDPOINTS_JSON") or "{}"
         try:
-            endpoints = json.loads(raw) if isinstance(raw, str) else raw
+            overrides = json.loads(raw) if isinstance(raw, str) else raw
         except (TypeError, ValueError) as exc:
             raise SefazConfigurationError("Configuração de endpoints SEFAZ inválida.") from exc
-        if not isinstance(endpoints, dict):
+        if not isinstance(overrides, dict) or any(
+            not isinstance(state, str) or not isinstance(values, dict)
+            for state, values in overrides.items()
+        ):
             raise SefazConfigurationError("Configuração de endpoints SEFAZ inválida.")
+        # Explicit overrides are useful when an authorizer changes an endpoint.
+        # Do not enable a state deliberately disabled in the catalog.
+        for state, values in overrides.items():
+            if state not in endpoints:
+                raise SefazConfigurationError(f"cUF {state} não está ativo no catálogo SEFAZ.")
+            endpoints[state].update(values)
         return cls(endpoints, timeout=float(config.get("NFE_SEFAZ_TIMEOUT_SECONDS", 20)))
 
     def endpoint(self, state: str, operation: str) -> str:
