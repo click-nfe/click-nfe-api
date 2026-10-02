@@ -1,6 +1,6 @@
 from sqlalchemy.dialects.postgresql import UUID
 
-from sqlalchemy import Column, ForeignKey, String, Boolean
+from sqlalchemy import Column, ForeignKey, String, Boolean, JSON
 from sqlalchemy.orm import relationship
 
 from app.models.utils import PasswordMixin, TimestampMixin, uuid_pk
@@ -24,6 +24,7 @@ class User(PasswordMixin, TimestampMixin, Base):
     role = Column(String(32), nullable=False, default="user")
     setor = Column(String(255), nullable=True)
     ativo = Column(Boolean, nullable=False, default=True)
+    access_tags = Column(JSON, nullable=False, default=list)
 
     organization = relationship("Organization", back_populates="users")
     admin_profile = relationship(

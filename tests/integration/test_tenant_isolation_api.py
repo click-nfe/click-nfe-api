@@ -312,3 +312,53 @@ def test_inactive_organization_cannot_login_or_use_existing_token(tenant_api):
     assert authenticated.status_code == 403
     assert authenticated.get_json()["error"] == "organization_inactive"
     assert refreshed.status_code == 401
+from app.models import User
+
+
+def test_admin_edits_only_own_organization(tenant_api):
+    client = tenant_api["client"]
+    response = client.patch("/organizations/me", headers=tenant_api["headers_a"],
+                            json={"nome": "Organização A Atualizada", "email": "fiscal@example.invalid"})
+    assert response.status_code == 200
+    assert response.get_json()["organization"]["nome"] == "Organização A Atualizada"
+    assert tenant_api["organization_b"].nome == "Organização B"
+    member = {"Authorization": f"Bearer {_token(tenant_api['app'], tenant_api['member_a'])}"}
+    assert client.patch("/organizations/me", headers=member, json={"nome": "Intruso"}).status_code == 403
+    assert client.patch("/organizations/me", headers=tenant_api["headers_a"], json={"cnpj": "123"}).status_code == 400
+
+
+def test_member_tags_restrict_api_immediately(tenant_api):
+    client = tenant_api["client"]
+    user = tenant_api["member_a"]
+    user.access_tags = ["processos"]
+    db.session.commit()
+    headers = {"Authorization": f"Bearer {_token(tenant_api['app'], user)}"}
+    assert client.get("/import-processes", headers=headers).status_code == 200
+    assert client.get("/clients", headers=headers).status_code == 200
+    assert client.post("/clients", headers=headers, json={}).status_code == 403
+    assert client.get("/organizations/me/integrations/portal-unico", headers=headers).status_code == 403
+    assert client.get("/nfe-drafts/00000000-0000-0000-0000-000000000000", headers=headers).status_code == 403
+    user.access_tags = ["emissao"]
+    db.session.commit()
+    assert client.get("/import-processes", headers=headers).status_code == 200
+    assert client.post("/import-processes", headers=headers, json={}).status_code == 403
+    assert client.get("/clients", headers=headers).status_code == 200
+
+
+def test_user_creation_and_tag_update_scoped_to_tenant(tenant_api):
+    client = tenant_api["client"]
+    headers = tenant_api["headers_a"]
+    payload = {"nome": "Nova Operadora", "email": "nova@example.invalid", "password": "senha-segura",
+               "role": "operacao", "access_tags": ["clientes"]}
+    response = client.post("/users", headers=headers, json=payload)
+    assert response.status_code == 201
+    user_id = response.get_json()["data"]["id"]
+    assert response.get_json()["data"]["access_tags"] == ["clientes"]
+    assert "password_hash" not in response.get_json()["data"]
+    response = client.put(f"/users/user/{user_id}", headers=headers,
+                          json={"access_tags": ["processos"], "ativo": True})
+    assert response.status_code == 200
+    assert response.get_json()["data"]["access_tags"] == ["processos"]
+    assert client.post("/users", headers=headers, json={**payload, "email": "bad@example.invalid", "access_tags": ["admin"]}).status_code == 400
+    assert client.delete(f"/users/user/{tenant_api['admin_a'].id}", headers=headers).status_code == 409
+    assert User.query.filter_by(email="nova@example.invalid").first().organization_id == tenant_api["organization_a"].id
