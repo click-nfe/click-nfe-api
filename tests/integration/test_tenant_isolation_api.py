@@ -340,7 +340,8 @@ def test_member_tags_restrict_api_immediately(tenant_api):
     assert client.get("/nfe-drafts/00000000-0000-0000-0000-000000000000", headers=headers).status_code == 403
     user.access_tags = ["emissao"]
     db.session.commit()
-    assert client.get("/import-processes", headers=headers).status_code == 403
+    assert client.get("/import-processes", headers=headers).status_code == 200
+    assert client.post("/import-processes", headers=headers, json={}).status_code == 403
     assert client.get("/clients", headers=headers).status_code == 200
 
 
