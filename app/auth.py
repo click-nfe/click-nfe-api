@@ -10,6 +10,27 @@ from .models import RefreshToken, User
 
 
 ADMIN_ROLE = "admin"
+ACCESS_TAGS = ("clientes", "processos", "emissao", "configuracoes")
+
+
+def required_access_tag(path: str, method: str) -> str | None:
+    if path.startswith("/import-processes"):
+        if any(part in path for part in ("/nfe-", "/item-classifications")):
+            return "emissao"
+        return "processos|emissao" if method in {"GET", "HEAD"} else "processos"
+    if path.startswith("/nfe-drafts"):
+        return "emissao"
+    if path.startswith("/nfe-carriers"):
+        return "emissao"
+    if path.startswith("/external-provider-connections"):
+        return "processos"
+    if path.startswith("/clients"):
+        if method in {"GET", "HEAD"}:
+            return "clientes|processos|emissao"
+        return "clientes"
+    if path.startswith("/organizations/me/integrations"):
+        return "configuracoes"
+    return None
 
 
 def serialize_identity(identity) -> dict:
@@ -21,6 +42,7 @@ def serialize_identity(identity) -> dict:
         "setor": identity.setor,
         "tipo": "user",
         "organizationId": str(identity.organization_id) if identity.organization_id else None,
+        "access_tags": list(ACCESS_TAGS) if identity.role == ADMIN_ROLE else list(identity.access_tags or []),
     }
 
 
@@ -110,6 +132,14 @@ def auth_required(fn):
                     "message": "A organização do usuário está inativa.",
                 }
             ), 403
+
+        required = required_access_tag(request.path, request.method)
+        if identity.role != ADMIN_ROLE and required and not set(required.split("|")) & set(identity.access_tags or []):
+            return jsonify({
+                "error": "access_tag_required",
+                "message": "Seu usuário não possui a tag de acesso necessária para esta operação.",
+                "required_tags": required.split("|"),
+            }), 403
 
         g.current_user = identity
         g.current_user_type = "admin" if identity.role == ADMIN_ROLE else "user"
