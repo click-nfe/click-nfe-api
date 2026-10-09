@@ -109,6 +109,14 @@ def _configure(client, headers, *, client_id="portal-client-1234", secret="secre
     )
 
 
+def test_production_rejects_ephemeral_portal_credentials(api):
+    api["app"].config["APP_ENV"] = "production"
+    response = _configure(api["client"], api["admin_headers"])
+    assert response.status_code == 409
+    assert response.get_json()["error"] == "persistent_storage_required"
+    assert not api["secret_dir"].exists()
+
+
 def test_get_reports_missing_configuration(api):
     response = api["client"].get(
         "/organizations/me/integrations/portal-unico",

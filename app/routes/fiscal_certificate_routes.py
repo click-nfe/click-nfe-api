@@ -107,6 +107,15 @@ def register_fiscal_certificate(client_id: str):
 @fiscal_certificate_bp.post("/<client_id>/fiscal-certificates/upload")
 @admin_required
 def upload_fiscal_certificate(client_id: str):
+    if (
+        current_app.config.get("APP_ENV") == "production"
+        and current_app.config.get("NFE_CERTIFICATE_STORAGE_PROVIDER")
+        == "local_encrypted_file"
+    ):
+        return jsonify({
+            "error": "persistent_storage_required",
+            "message": "O upload do certificado exige armazenamento persistente neste ambiente.",
+        }), 409
     client_uuid = uuid_or_404(client_id)
     certificate_file = request.files.get("certificate")
     if certificate_file is None or not certificate_file.filename:
