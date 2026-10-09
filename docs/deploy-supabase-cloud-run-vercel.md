@@ -37,6 +37,68 @@ Para Preview, use outra API/banco ou deixe `API_URL` sem configuração até exi
 
 `CORS_ORIGINS` na API só precisa incluir o domínio Vercel se o navegador chamar Flask **diretamente**; o fluxo atual usa Route Handlers same-origin da Vercel. Se passar a fazer chamadas diretas, configure a origem exata, sem caminho, no Cloud Run.
 
+## Primeiro administrador em produção
+
+Em um banco novo, a migration cria as tabelas, mas não cria uma organização ou usuário. Após o deploy da versão que contém o comando `bootstrap-admin`, faça **uma única** execução da Job abaixo. O comando aceita somente `APP_ENV=production`, recusa o banco se já houver qualquer organização ou usuário e grava os dois registros em uma transação. Não use `dev seed-admin` no banco de produção.
+
+No Cloud Shell do projeto `click-nfe-project`, crie um secret exclusivo para a senha inicial. O prompt não a exibe nem a grava no histórico do shell:
+
+```bash
+read -rs -p 'Senha inicial do administrador (mínimo 16 caracteres): ' CLICK_NFE_ADMIN_PASSWORD
+printf '\n'
+printf '%s' "$CLICK_NFE_ADMIN_PASSWORD" | gcloud secrets create click-nfe-bootstrap-admin-password --data-file=-
+unset CLICK_NFE_ADMIN_PASSWORD
+
+gcloud secrets add-iam-policy-binding click-nfe-bootstrap-admin-password \
+  --member='serviceAccount:click-nfe-runtime@click-nfe-project.iam.gserviceaccount.com' \
+  --role='roles/secretmanager.secretAccessor'
+```
+
+Informe os dados reais da sua organização e do administrador. O slug deve conter somente letras minúsculas, números e hífens. Evite vírgulas nos nomes ao usar `--set-env-vars`:
+
+```bash
+read -r -p 'Nome da organização: ' CLICK_NFE_ORG_NAME
+read -r -p 'Slug da organização: ' CLICK_NFE_ORG_SLUG
+read -r -p 'Nome do administrador: ' CLICK_NFE_ADMIN_NAME
+read -r -p 'E-mail do administrador: ' CLICK_NFE_ADMIN_EMAIL
+
+CLICK_NFE_IMAGE="$(gcloud run services describe click-nfe-api \
+  --region=southamerica-east1 \
+  --format='value(spec.template.spec.containers.image)')"
+printf 'Imagem da API: %s\n' "$CLICK_NFE_IMAGE"
+```
+
+Confirme que a imagem retornada é a do **deploy após o merge do PR de bootstrap**, não uma imagem anterior. Configure a Job sem executá-la no mesmo comando:
+
+```bash
+gcloud run jobs deploy click-nfe-api-bootstrap \
+  --region=southamerica-east1 \
+  --image="$CLICK_NFE_IMAGE" \
+  --service-account=click-nfe-runtime@click-nfe-project.iam.gserviceaccount.com \
+  --command=flask \
+  --args=--app,wsgi.py,bootstrap-admin \
+  --tasks=1 \
+  --max-retries=0 \
+  --task-timeout=600s \
+  --set-env-vars="APP_ENV=production,BOOTSTRAP_ORGANIZATION_NAME=${CLICK_NFE_ORG_NAME},BOOTSTRAP_ORGANIZATION_SLUG=${CLICK_NFE_ORG_SLUG},BOOTSTRAP_ADMIN_NAME=${CLICK_NFE_ADMIN_NAME},BOOTSTRAP_ADMIN_EMAIL=${CLICK_NFE_ADMIN_EMAIL}" \
+  --set-secrets='DATABASE_URL=click-nfe-database-url:1,SECRET_KEY=click-nfe-secret-key:1,BOOTSTRAP_ADMIN_PASSWORD=click-nfe-bootstrap-admin-password:1'
+
+gcloud run jobs execute click-nfe-api-bootstrap \
+  --region=southamerica-east1 --wait
+
+gcloud run jobs logs read click-nfe-api-bootstrap \
+  --region=southamerica-east1 --limit=50
+```
+
+O log esperado é `Bootstrap concluído: organização e administrador criados.` Confirme no Supabase que `organizations` e `users` contêm um registro cada e teste o login no painel. **Somente após confirmar o acesso**, desabilite a versão da senha de bootstrap e remova a Job de uso único:
+
+```bash
+gcloud secrets versions disable 1 --secret=click-nfe-bootstrap-admin-password
+gcloud run jobs delete click-nfe-api-bootstrap --region=southamerica-east1
+```
+
+Mantenha o secret `click-nfe-secret-key`: ele assina as sessões da API e é diferente da senha temporária de bootstrap. Nunca envie a senha inicial nos logs ou em mensagens.
+
 ## 4. Limitação dos cofres locais no Cloud Run
 
 Os uploads de certificado A1 e as credenciais do Portal Único cadastradas pelo painel usam atualmente `local_encrypted_file`. O disco do Cloud Run é temporário: arquivos podem sumir ao reiniciar e não são compartilhados por instâncias. Referências `local:` já salvas no PostgreSQL não levam os respectivos arquivos para a nuvem. Com `APP_ENV=production`, a API **recusa uploads e cadastros locais com HTTP 409**, evitando gerar novos registros que seriam perdidos. **Não transmita NF-e nesse serviço** até implantar e validar armazenamento persistente (Secret Manager ou volume apropriado), migrar/reinserir as credenciais e certificados e testar resolução após reiniciar uma instância. Deixe `NFE_SEFAZ_TRANSMISSION_ENABLED=false` (padrão) nesse primeiro deploy.
