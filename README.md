@@ -218,9 +218,11 @@ A senha é solicitada e confirmada sem aparecer no terminal. Ela não deve ser
 incluída no Git. Executar novamente o comando atualiza o usuário e permite
 trocar sua senha local.
 
-O comando recusa execução quando `APP_ENV` não é `development`. A API também
-não expõe cadastro público: organizações e administradores são provisionados
-por processo controlado.
+O comando recusa execução quando `APP_ENV` não é `development`. Para cadastro
+pela plataforma, `POST /auth/register` cria uma nova organização e o primeiro
+administrador com senha de 16 a 128 caracteres. O endpoint é público; novos
+usuários da organização continuam sendo criados pelo administrador autenticado.
+Para produção, veja `docs/deploy-supabase-cloud-run-vercel.md`.
 
 Para remover integralmente o schema em um banco local descartável:
 
@@ -378,7 +380,7 @@ Certificados A1, senhas e credenciais do Portal Único não devem ser persistido
 Todo usuário operacional do Click NFe pertence obrigatoriamente a uma única
 organização. Não há superadministrador global nesta fase do produto.
 
-- não existe cadastro público de organizações ou usuários;
+- novas organizações criam seu primeiro administrador por `POST /auth/register`;
 - no desenvolvimento, o primeiro `admin` é criado pelo comando `dev seed-admin`;
 - usuários adicionais são criados por um `admin` da própria organização;
 - recursos de clientes e do fluxo fiscal são sempre consultados com o

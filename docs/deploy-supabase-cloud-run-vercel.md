@@ -39,6 +39,10 @@ Para Preview, use outra API/banco ou deixe `API_URL` sem configuração até exi
 
 ## Primeiro administrador em produção
 
+**Cadastro pela plataforma:** com o frontend atualizado, abra `/cadastro` e informe o nome da organização, slug, nome do administrador, e-mail e senha. O frontend envia o pedido a `POST /auth/register`. O endpoint cria a organização e seu primeiro administrador na mesma transação e retorna HTTP 201; entre em `/login` com a senha escolhida. Um slug, nome ou e-mail já usado retorna HTTP 409. Não há migration nova para esse fluxo. Para cadastrar o Grupo Casco por essa tela, **não execute a Job de bootstrap abaixo**: ela recusa qualquer banco que já tenha organização ou usuário.
+
+Publique primeiro a API com `/auth/register` e depois o frontend com `/cadastro`. O cadastro aberto permite que qualquer visitante crie uma organização e seu administrador. Antes de divulgar o formulário em escala, planeje verificação de e-mail e proteção contra cadastros automatizados. O fluxo abaixo continua disponível para inicialização administrativa quando o cadastro pela plataforma não puder ser usado.
+
 Em um banco novo, a migration cria as tabelas, mas não cria uma organização ou usuário. Após o deploy da versão que contém o comando `bootstrap-admin`, faça **uma única** execução da Job abaixo. O comando aceita somente `APP_ENV=production`, recusa o banco se já houver qualquer organização ou usuário e grava os dois registros em uma transação. Não use `dev seed-admin` no banco de produção.
 
 No Cloud Shell do projeto `click-nfe-project`, crie um secret exclusivo para a senha inicial. O prompt não a exibe nem a grava no histórico do shell:
