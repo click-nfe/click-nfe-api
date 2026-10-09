@@ -118,6 +118,18 @@ def _upload(
     )
 
 
+def test_production_rejects_ephemeral_certificate_upload(api):
+    client, headers, client_id, certificate_dir = api
+    client.application.config["APP_ENV"] = "production"
+    response = client.post(
+        f"/clients/{client_id}/fiscal-certificates/upload",
+        headers=headers,
+    )
+    assert response.status_code == 409
+    assert response.get_json()["error"] == "persistent_storage_required"
+    assert not certificate_dir.exists()
+
+
 def test_upload_validates_encrypts_and_registers_a1(api):
     client, headers, client_id, certificate_dir = api
     material = certificate_material("00000000000191")

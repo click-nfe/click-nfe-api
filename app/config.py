@@ -45,7 +45,12 @@ class Config:
 
     SQLALCHEMY_DATABASE_URI = _database_uri()
     SQLALCHEMY_TRACK_MODIFICATIONS = False
-    SQLALCHEMY_ENGINE_OPTIONS = {"pool_pre_ping": True}
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        "pool_pre_ping": True,
+        "pool_size": int(os.getenv("DB_POOL_SIZE", "2")),
+        "max_overflow": int(os.getenv("DB_MAX_OVERFLOW", "1")),
+        "pool_recycle": int(os.getenv("DB_POOL_RECYCLE_SECONDS", "300")),
+    }
 
     CORS_ORIGINS = _csv_env(
         "CORS_ORIGINS",

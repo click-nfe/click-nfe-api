@@ -112,6 +112,15 @@ def get_portal_unico_settings():
 @organization_bp.put("/me/integrations/portal-unico")
 @admin_required
 def configure_portal_unico():
+    if (
+        current_app.config.get("APP_ENV") == "production"
+        and current_app.config.get("PORTAL_UNICO_CREDENTIAL_STORAGE_PROVIDER")
+        == "local_encrypted_file"
+    ):
+        return jsonify({
+            "error": "persistent_storage_required",
+            "message": "O cadastro do Portal Único exige armazenamento persistente neste ambiente.",
+        }), 409
     service = None
     rotation = None
     try:
