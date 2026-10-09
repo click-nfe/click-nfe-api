@@ -150,21 +150,28 @@ def tenant_api():
         db.drop_all()
 
 
-def test_public_registration_is_not_available(tenant_api):
+def test_public_registration_creates_a_separate_organization(tenant_api):
     response = tenant_api["client"].post(
         "/auth/register",
         json={
-            "nome": "Novo Administrador",
+            "name": "Novo Administrador",
             "email": "novo-admin@example.invalid",
-            "password": "senha-segura",
-            "organization_nome": "Nova Organização",
+            "password": "uma-senha-segura-com-20-caracteres",
+            "organization_name": "Nova Organização",
             "organization_slug": "nova-organizacao",
         },
     )
 
-    assert response.status_code == 404
-    assert Organization.query.filter_by(slug="nova-organizacao").first() is None
-    assert User.query.filter_by(email="novo-admin@example.invalid").first() is None
+    assert response.status_code == 201
+    organization = Organization.query.filter_by(slug="nova-organizacao").one()
+    user = User.query.filter_by(email="novo-admin@example.invalid").one()
+    assert user.organization_id == organization.id
+    assert user.role == "admin"
+    assert tenant_api["client"].post("/auth/login", json={
+        "email": user.email, "password": "uma-senha-segura-com-20-caracteres"
+    }).status_code == 200
+    listed = tenant_api["client"].get("/users", headers=tenant_api["headers_a"])
+    assert str(user.id) not in {row["id"] for row in listed.get_json()}
 
 
 def test_user_lists_only_include_current_organization(tenant_api):
