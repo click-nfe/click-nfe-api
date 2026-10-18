@@ -91,7 +91,7 @@ Regras mínimas:
 - service account de homologação não acessa secrets de produção;
 - aplicação web não recebe `secretAccessor`; somente o serviço assinador;
 - produção exige proteção contra exclusão e auditoria de acesso;
-- secrets do certificado e da senha são distintos;
+- o PFX fica em objeto privado no Cloud Storage e a senha em versão do Secret Manager;
 - referência do secret inclui versão ou alias controlado;
 - upload valida tamanho, PKCS#12, CNPJ e validade antes de ativar;
 - nenhum endpoint retorna `certificate_ref` completo a usuários comuns.

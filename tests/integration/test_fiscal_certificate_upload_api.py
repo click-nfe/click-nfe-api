@@ -8,7 +8,10 @@ import pytest
 from app import create_app
 from app.extensions import db
 from app.models import Client, ClientFiscalProfile, Organization, User
+from app.services.fiscal_certificate import DefaultCertificateVault
+from app.services.gcp_fiscal_storage import GcpCloudStorageCertificateVault
 from tests.helpers import certificate_material
+from tests.unit.test_gcp_fiscal_storage import SecretClient, StorageClient
 
 
 @pytest.fixture
@@ -128,6 +131,34 @@ def test_production_rejects_ephemeral_certificate_upload(api):
     assert response.status_code == 409
     assert response.get_json()["error"] == "persistent_storage_required"
     assert not certificate_dir.exists()
+
+
+def test_production_upload_uses_persistent_storage_and_can_activate(api):
+    client, headers, client_id, certificate_dir = api
+    secrets, storage = SecretClient(), StorageClient()
+    vault = GcpCloudStorageCertificateVault(
+        bucket_name="click-nfe-test-a1", project_id="project-test",
+        secret_client=secrets, storage_client=storage,
+    )
+    client.application.config.update(
+        APP_ENV="production",
+        NFE_CERTIFICATE_STORAGE_PROVIDER="gcp_cloud_storage",
+        NFE_CERTIFICATE_BUCKET="click-nfe-test-a1",
+        GCP_PROJECT_ID="project-test",
+        NFE_CERTIFICATE_UPLOAD_STORE=vault,
+        NFE_CERTIFICATE_VAULT=DefaultCertificateVault(cloud_storage_vault=vault),
+    )
+    response = _upload(client, headers, client_id, certificate_material("00000000000191"))
+    assert response.status_code == 201
+    record = response.get_json()
+    assert record["provider"] == "gcp_cloud_storage"
+    assert not certificate_dir.exists()
+    activated = client.post(
+        f"/clients/{client_id}/fiscal-certificates/{record['id']}/activate",
+        headers=headers,
+    )
+    assert activated.status_code == 200
+    assert activated.get_json()["is_active"] is True
 
 
 def test_upload_validates_encrypts_and_registers_a1(api):

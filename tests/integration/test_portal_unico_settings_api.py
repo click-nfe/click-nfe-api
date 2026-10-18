@@ -7,7 +7,11 @@ import pytest
 from app import create_app
 from app.extensions import db
 from app.integrations.portal_unico import PortalUnicoApiError
+from app.integrations.portal_unico.client import (
+    DefaultPortalCredentialResolver, GcpManagedPortalCredentialStore,
+)
 from app.models import ExternalProviderConnection, Organization, User
+from tests.unit.test_gcp_fiscal_storage import SecretClient
 
 
 class SuccessfulGateway:
@@ -115,6 +119,33 @@ def test_production_rejects_ephemeral_portal_credentials(api):
     assert response.status_code == 409
     assert response.get_json()["error"] == "persistent_storage_required"
     assert not api["secret_dir"].exists()
+
+
+def test_production_portal_credentials_rotate_in_secret_manager(api):
+    secrets = SecretClient()
+    store = GcpManagedPortalCredentialStore(
+        project_id="project-test", secret_name="click-nfe-portal-unico-credentials",
+        client=secrets,
+    )
+    api["app"].config.update(
+        APP_ENV="production",
+        PORTAL_UNICO_CREDENTIAL_STORAGE_PROVIDER="gcp_secret_manager",
+        PORTAL_UNICO_CREDENTIAL_STORE=store,
+        PORTAL_UNICO_CREDENTIAL_RESOLVER=DefaultPortalCredentialResolver(managed_resolver=store),
+        PORTAL_UNICO_GATEWAY_FACTORY=lambda *_args: SuccessfulGateway(),
+    )
+    assert _configure(api["client"], api["admin_headers"]).status_code == 200
+    rotated = _configure(api["client"], api["admin_headers"], client_id="new-id", secret="new-secret")
+    assert rotated.status_code == 200
+    assert rotated.get_json()["credential_storage_provider"] == "gcp_secret_manager"
+    tested = api["client"].post(
+        "/organizations/me/integrations/portal-unico/test", headers=api["admin_headers"]
+    )
+    assert tested.status_code == 200
+    assert tested.get_json()["state"] == "connected"
+    assert not api["secret_dir"].exists()
+    with api["app"].app_context():
+        assert ExternalProviderConnection.query.one().credentials_ref.endswith("@2")
 
 
 def test_get_reports_missing_configuration(api):

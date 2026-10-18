@@ -375,6 +375,102 @@ class GcpSecretManagerPortalCredentialResolver:
         return self._client
 
 
+class GcpManagedPortalCredentialStore:
+    """One pre-created Secret Manager secret, with an atomic JSON version per organization."""
+
+    provider = "gcp_secret_manager"
+    _REFERENCE = re.compile(r"^gcp-managed:([0-9a-f-]{36})@([1-9][0-9]*)$")
+    _SECRET_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
+
+    def __init__(
+        self, *, project_id: str | None, secret_name: str,
+        client: Any | None = None,
+    ) -> None:
+        self.project_id = project_id
+        self.secret_name = secret_name
+        self._client = client
+
+    @classmethod
+    def from_config(cls, config: Mapping[str, Any]):
+        return cls(
+            project_id=(config.get("GCP_PROJECT_ID") or os.getenv("GOOGLE_CLOUD_PROJECT")
+                        or os.getenv("GCP_PROJECT_ID")),
+            secret_name=config.get("PORTAL_UNICO_MANAGED_SECRET_NAME", "click-nfe-portal-unico-credentials"),
+        )
+
+    def _parent(self):
+        if not self.project_id or not self._SECRET_NAME.fullmatch(self.secret_name):
+            raise PortalUnicoIntegrationError("Projeto ou cofre do Portal Único inválido ou ausente.")
+        return f"projects/{self.project_id}/secrets/{self.secret_name}"
+
+    def _secret_manager_client(self):
+        if self._client is None:
+            from google.cloud import secretmanager
+
+            self._client = secretmanager.SecretManagerServiceClient()
+        return self._client
+
+    def store(self, *, organization_id: str, credentials: PortalUnicoCredentials) -> str:
+        parent = self._parent()
+        try:
+            organization = str(uuid.UUID(organization_id))
+        except ValueError as exc:
+            raise PortalUnicoIntegrationError("Organização inválida para o Portal Único.") from exc
+        payload = json.dumps({
+            "organization_id": organization,
+            "client_id": credentials.client_id,
+            "client_secret": credentials.client_secret,
+        }, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        if len(payload) > 65536:
+            raise PortalUnicoIntegrationError("Credenciais do Portal Único excedem o limite do cofre.")
+        try:
+            result = self._secret_manager_client().add_secret_version(
+                request={"parent": parent, "payload": {"data": payload}}
+            )
+            version = int(result.name.rsplit("/", 1)[-1])
+            return f"gcp-managed:{organization}@{version}"
+        except Exception:
+            raise PortalUnicoIntegrationError("Não foi possível armazenar as credenciais do Portal Único.") from None
+
+    def _version_name(self, reference: str):
+        match = self._REFERENCE.fullmatch(str(reference or ""))
+        if not match:
+            raise PortalUnicoIntegrationError("Referência do Portal Único inválida.")
+        try:
+            if str(uuid.UUID(match.group(1))) != match.group(1):
+                raise ValueError
+        except ValueError as exc:
+            raise PortalUnicoIntegrationError("Referência do Portal Único inválida.") from exc
+        return match.group(1), f"{self._parent()}/versions/{match.group(2)}"
+
+    def resolve(self, credentials_ref: str, *, role_type: str) -> PortalUnicoCredentials:
+        organization, version_name = self._version_name(credentials_ref)
+        try:
+            response = self._secret_manager_client().access_secret_version(
+                request={"name": version_name}
+            )
+            payload = json.loads(bytes(response.payload.data))
+            if payload.get("organization_id") != organization:
+                raise ValueError("organization mismatch")
+            return PortalUnicoCredentials(
+                client_id=payload["client_id"],
+                client_secret=payload["client_secret"],
+                role_type=role_type,
+            )
+        except Exception:
+            raise PortalUnicoIntegrationError("Não foi possível recuperar as credenciais do Portal Único.") from None
+
+    def delete(self, credentials_ref: str) -> None:
+        _, version_name = self._version_name(credentials_ref)
+        try:
+            self._secret_manager_client().destroy_secret_version(
+                request={"name": version_name}
+            )
+        except Exception:
+            # A failure to destroy an orphan must not hide the database error.
+            pass
+
+
 class DefaultPortalCredentialResolver:
     """Seleciona o provider a partir do prefixo salvo em credentials_ref."""
 
@@ -384,6 +480,7 @@ class DefaultPortalCredentialResolver:
         environment_resolver: PortalCredentialResolver | None = None,
         gcp_resolver: PortalCredentialResolver | None = None,
         local_resolver: PortalCredentialResolver | None = None,
+        managed_resolver: PortalCredentialResolver | None = None,
     ) -> None:
         self.environment_resolver = (
             environment_resolver or EnvironmentPortalCredentialResolver()
@@ -392,9 +489,14 @@ class DefaultPortalCredentialResolver:
             gcp_resolver or GcpSecretManagerPortalCredentialResolver()
         )
         self.local_resolver = local_resolver
+        self.managed_resolver = managed_resolver
 
     def resolve(self, credentials_ref: str, *, role_type: str) -> PortalUnicoCredentials:
         reference = str(credentials_ref or "")
+        if reference.startswith("gcp-managed:"):
+            if self.managed_resolver is None:
+                raise PortalUnicoIntegrationError("O cofre do Portal Único não está configurado.")
+            return self.managed_resolver.resolve(credentials_ref, role_type=role_type)
         if reference.startswith("env:"):
             return self.environment_resolver.resolve(reference, role_type=role_type)
         if reference.startswith("gcp:"):
@@ -406,7 +508,7 @@ class DefaultPortalCredentialResolver:
             )
             return local_resolver.resolve(reference, role_type=role_type)
         raise PortalUnicoIntegrationError(
-            "credentials_ref deve começar com local:, env: ou gcp:."
+            "credentials_ref deve começar com local:, env:, gcp: ou gcp-managed:."
         )
 
 
@@ -421,6 +523,8 @@ def portal_credential_store_from_config(
         "local_encrypted_file",
     )
     if provider != "local_encrypted_file":
+        if provider == "gcp_secret_manager":
+            return GcpManagedPortalCredentialStore.from_config(config)
         raise PortalUnicoIntegrationError(
             "O provider de gravação das credenciais do Portal Único não é suportado."
         )
@@ -448,7 +552,12 @@ def portal_credential_resolver_from_config(
         encryption_key=config.get("PORTAL_UNICO_LOCAL_SECRET_KEY"),
         secret_key=config.get("SECRET_KEY"),
     )
-    return DefaultPortalCredentialResolver(local_resolver=local_store)
+    managed_store = None
+    if config.get("PORTAL_UNICO_CREDENTIAL_STORAGE_PROVIDER") == "gcp_secret_manager":
+        managed_store = GcpManagedPortalCredentialStore.from_config(config)
+    return DefaultPortalCredentialResolver(
+        local_resolver=local_store, managed_resolver=managed_store
+    )
 
 
 @dataclass(frozen=True)

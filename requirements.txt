@@ -13,6 +13,7 @@ gunicorn>=22,<23
 flask_cors==3.0.10
 marshmallow_enum
 google-cloud-secret-manager>=2.20,<3
+google-cloud-storage>=2.19,<4
 lxml>=5,<7
 cryptography>=44,<50
 reportlab>=4.2,<5

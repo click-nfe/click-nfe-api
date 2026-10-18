@@ -6,7 +6,7 @@ A consulta de DUIMP usa o par de chaves gerado no Portal Único para a pessoa
 jurídica intermediadora. O certificado A1 utilizado para gerar esse par não é
 carregado pela API.
 
-No Google Secret Manager, os secrets esperados são:
+Para leitura de referências legadas, os secrets esperados são:
 
 - `PORTAL_UNICO_CLIENT_ID`
 - `PORTAL_UNICO_CLIENT_SECRET`
@@ -94,14 +94,14 @@ manualmente, mas não é usado pelo formulário organizacional.
 
 Nenhum arquivo de credenciais, chave de acesso ou `.env` deve ser versionado.
 
-## Migração futura e rotação
+## Escrita persistente no Cloud Run e rotação
 
-O contrato de escrita é `PortalCredentialStore` e o de leitura é
-`PortalCredentialResolver`. Na implantação no Google Cloud, o writer deverá
-criar novas versões dos dois secrets e devolver `gcp:PORTAL_UNICO`; o fluxo de
-DUIMP continuará usando a mesma conexão organizacional.
-
-Cada rotação cria uma nova versão nos dois secrets. Depois de validar as duas
-versões, altere `PORTAL_UNICO_SECRET_VERSION` para o mesmo número e implante
-uma nova revisão do Cloud Run. Não use versões diferentes para Client ID e
-Client Secret.
+Com `PORTAL_UNICO_CREDENTIAL_STORAGE_PROVIDER=gcp_secret_manager`, o formulário
+grava o par Client ID/Client Secret como um único JSON versionado no secret
+preexistente `click-nfe-portal-unico-credentials`. A referência no banco tem o
+formato `gcp-managed:<organization_id>@<version>` e a leitura confere o ID da
+organização presente no payload. Cada rotação grava uma versão nova e o registro
+da organização aponta à versão exata; a anterior permanece para recuperação.
+O resolver `gcp:PORTAL_UNICO` acima continua disponível para referências legadas
+e utiliza `PORTAL_UNICO_SECRET_VERSION`; não é usado no novo formulário.
+Confira a preparação de IAM em `docs/deploy-fiscal-storage-gcp.md`.

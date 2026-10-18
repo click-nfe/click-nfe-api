@@ -105,9 +105,9 @@ Mantenha o secret `click-nfe-secret-key`: ele assina as sessões da API e é dif
 
 ## 4. Limitação dos cofres locais no Cloud Run
 
-Os uploads de certificado A1 e as credenciais do Portal Único cadastradas pelo painel usam atualmente `local_encrypted_file`. O disco do Cloud Run é temporário: arquivos podem sumir ao reiniciar e não são compartilhados por instâncias. Referências `local:` já salvas no PostgreSQL não levam os respectivos arquivos para a nuvem. Com `APP_ENV=production`, a API **recusa uploads e cadastros locais com HTTP 409**, evitando gerar novos registros que seriam perdidos. **Não transmita NF-e nesse serviço** até implantar e validar armazenamento persistente (Secret Manager ou volume apropriado), migrar/reinserir as credenciais e certificados e testar resolução após reiniciar uma instância. Deixe `NFE_SEFAZ_TRANSMISSION_ENABLED=false` (padrão) nesse primeiro deploy.
+Os uploads de certificado A1 e as credenciais do Portal Único com `local_encrypted_file` são recusados em produção com HTTP 409. Após preparar o bucket e os dois secrets indicados em [armazenamento fiscal persistente](deploy-fiscal-storage-gcp.md) e publicar a nova revisão, os formulários passam a gravar no Cloud Storage e Secret Manager. Referências `local:` antigas não são transportadas para a nuvem: recadastre as credenciais e o A1. Deixe `NFE_SEFAZ_TRANSMISSION_ENABLED=false` até validar todo o fluxo.
 
-O código já consegue *ler* referências `gcp:` de Secret Manager para certificados e Portal Único, mas o cadastro pelo painel ainda grava somente no cofre local. Essa migração dos arquivos/fluxos é um checkpoint separado de infraestrutura fiscal.
+O registro de certificados manuais `gcp:` legados ainda pode ser lido. Novos uploads persistidos gravam `gcs:` para o PFX e `gcp:` para a senha; o Portal Único grava `gcp-managed:` com a versão do par de chaves.
 
 ## Verificações antes de liberar produção
 

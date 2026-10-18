@@ -4,6 +4,7 @@ substitutions:
   _REGION: southamerica-east1
   _AR_REPOSITORY: click-nfe
   _SERVICE: click-nfe-api
+  _CERTIFICATE_BUCKET: click-nfe-project-prod-a1-881716800915
 
 steps:
   - id: build
@@ -61,7 +62,7 @@ steps:
       - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPOSITORY}/${_SERVICE}:$BUILD_ID
       - --region=${_REGION}
       - --service-account=click-nfe-runtime@$PROJECT_ID.iam.gserviceaccount.com
-      - --update-env-vars=APP_ENV=production,WEB_CONCURRENCY=1
+      - --update-env-vars=APP_ENV=production,WEB_CONCURRENCY=1,GCP_PROJECT_ID=$PROJECT_ID,NFE_CERTIFICATE_STORAGE_PROVIDER=gcp_cloud_storage,NFE_CERTIFICATE_BUCKET=${_CERTIFICATE_BUCKET},PORTAL_UNICO_CREDENTIAL_STORAGE_PROVIDER=gcp_secret_manager
       - --update-secrets=DATABASE_URL=click-nfe-database-url:1,SECRET_KEY=click-nfe-secret-key:1
       - --max=1
       - --concurrency=8
