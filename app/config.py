@@ -41,6 +41,7 @@ def _csv_env(name: str, default: str) -> list[str]:
 
 class Config:
     APP_ENV = os.getenv("APP_ENV", "development")
+    GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID") or os.getenv("GOOGLE_CLOUD_PROJECT")
     SECRET_KEY = os.getenv("SECRET_KEY")
 
     SQLALCHEMY_DATABASE_URI = _database_uri()
@@ -95,6 +96,13 @@ class Config:
     NFE_CERTIFICATE_STORAGE_PROVIDER = os.getenv(
         "NFE_CERTIFICATE_STORAGE_PROVIDER",
         "local_encrypted_file",
+    )
+    NFE_CERTIFICATE_BUCKET = os.getenv("NFE_CERTIFICATE_BUCKET")
+    NFE_CERTIFICATE_PASSWORD_SECRET_NAME = os.getenv(
+        "NFE_CERTIFICATE_PASSWORD_SECRET_NAME", "click-nfe-a1-passwords"
+    )
+    PORTAL_UNICO_MANAGED_SECRET_NAME = os.getenv(
+        "PORTAL_UNICO_MANAGED_SECRET_NAME", "click-nfe-portal-unico-credentials"
     )
     NFE_LOCAL_CERTIFICATE_DIR = os.getenv(
         "NFE_LOCAL_CERTIFICATE_DIR",

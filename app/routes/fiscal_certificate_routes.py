@@ -54,6 +54,10 @@ def _service() -> FiscalCertificateRegistry:
     upload_store = None
     if storage_provider == "local_encrypted_file":
         upload_store = local_vault
+    elif storage_provider == "gcp_cloud_storage":
+        from app.services.gcp_fiscal_storage import GcpCloudStorageCertificateVault
+
+        upload_store = GcpCloudStorageCertificateVault.from_config(current_app.config)
     return FiscalCertificateRegistry(
         current_user=g.current_user,
         vault=certificate_vault_from_config(current_app.config),

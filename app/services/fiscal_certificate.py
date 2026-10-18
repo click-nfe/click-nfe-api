@@ -422,6 +422,7 @@ class DefaultCertificateVault:
         environment_vault: CertificateVault | None = None,
         gcp_vault: CertificateVault | None = None,
         local_vault: CertificateVault | None = None,
+        cloud_storage_vault: CertificateVault | None = None,
     ) -> None:
         self.environment_vault = (
             environment_vault or EnvironmentCertificateVault()
@@ -430,6 +431,7 @@ class DefaultCertificateVault:
             gcp_vault or GcpSecretManagerCertificateVault()
         )
         self.local_vault = local_vault
+        self.cloud_storage_vault = cloud_storage_vault
 
     def resolve(
         self,
@@ -444,6 +446,8 @@ class DefaultCertificateVault:
             "FiscalCredentialProvider.LOCAL_ENCRYPTED_FILE",
             "gcp_secret_manager",
             "FiscalCredentialProvider.GCP_SECRET_MANAGER",
+            "gcp_cloud_storage",
+            "FiscalCredentialProvider.GCP_CLOUD_STORAGE",
         }:
             raise FiscalCertificateError(
                 "O provider do certificado ainda não é suportado para assinatura."
@@ -473,6 +477,16 @@ class DefaultCertificateVault:
                 certificate_ref=certificate_ref,
                 password_ref=password_ref,
             )
+        if certificate_ref.startswith("gcs:") and password_ref.startswith("gcp:"):
+            if provider_value not in {"gcp_cloud_storage", "FiscalCredentialProvider.GCP_CLOUD_STORAGE"}:
+                raise FiscalCertificateError("O provider não corresponde ao Cloud Storage.")
+            if self.cloud_storage_vault is None:
+                raise FiscalCertificateError("O acesso ao Cloud Storage não está configurado.")
+            return self.cloud_storage_vault.resolve(
+                provider=provider_value,
+                certificate_ref=certificate_ref,
+                password_ref=password_ref,
+            )
         raise FiscalCertificateError(
             "Certificado e senha devem usar o mesmo provider local:, env: ou gcp:."
         )
@@ -492,7 +506,14 @@ def certificate_vault_from_config(config: Mapping[str, Any]) -> CertificateVault
         encryption_key=config.get("NFE_LOCAL_CERTIFICATE_KEY"),
         secret_key=config.get("SECRET_KEY"),
     )
-    return DefaultCertificateVault(local_vault=local_vault)
+    cloud_storage_vault = None
+    if config.get("NFE_CERTIFICATE_STORAGE_PROVIDER") == "gcp_cloud_storage":
+        from app.services.gcp_fiscal_storage import GcpCloudStorageCertificateVault
+
+        cloud_storage_vault = GcpCloudStorageCertificateVault.from_config(config)
+    return DefaultCertificateVault(
+        local_vault=local_vault, cloud_storage_vault=cloud_storage_vault
+    )
 
 
 class A1CertificateInspector:

@@ -249,10 +249,14 @@ preservados.
 | `CEP_LOOKUP_TIMEOUT_SECONDS` | Limite individual por provedor de CEP | `4` |
 | `CEP_CACHE_TTL_SECONDS` | Validade do endereço em cache antes de nova consulta | `2592000` |
 | `PORTAL_UNICO_CREDENTIAL_STORAGE_PROVIDER` | Destino das credenciais cadastradas pela organização | `local_encrypted_file` |
+| `PORTAL_UNICO_MANAGED_SECRET_NAME` | Secret preexistente para versões atômicas das credenciais no GCP | `click-nfe-portal-unico-credentials` |
 | `PORTAL_UNICO_LOCAL_SECRET_DIR` | Diretório do cofre local do Portal Único | `/app/data/portal-unico` |
 | `PORTAL_UNICO_LOCAL_SECRET_KEY` | Chave Fernet exclusiva do cofre do Portal Único | derivada de `SECRET_KEY` no desenvolvimento |
 | `PORTAL_UNICO_TIMEOUT_SECONDS` | Limite da autenticação no Portal Único | `30` |
 | `NFE_CERTIFICATE_STORAGE_PROVIDER` | Destino dos novos uploads A1 | `local_encrypted_file` |
+| `NFE_CERTIFICATE_BUCKET` | Bucket privado para arquivos A1 no Cloud Run | sem padrão |
+| `NFE_CERTIFICATE_PASSWORD_SECRET_NAME` | Secret preexistente para senhas A1 versionadas | `click-nfe-a1-passwords` |
+| `GCP_PROJECT_ID` | Projeto de leitura dos secrets fiscais | sem padrão |
 | `NFE_LOCAL_CERTIFICATE_DIR` | Diretório do cofre local criptografado | `/app/data/certificates` |
 | `NFE_LOCAL_CERTIFICATE_KEY` | Chave Fernet exclusiva do cofre local | derivada de `SECRET_KEY` no desenvolvimento |
 | `NFE_CERTIFICATE_MAX_BYTES` | Tamanho máximo do arquivo `.pfx`/`.p12` | `2097152` |
@@ -351,10 +355,10 @@ NFE_LOCAL_CERTIFICATE_KEY=valor-gerado
 ```
 
 Se essa chave for perdida ou alterada, os certificados locais existentes não
-poderão ser descriptografados. Em produção, novos uploads deverão usar uma
-implementação de `CertificateUploadStore` para o Google Secret Manager. O
-contrato do frontend e o cadastro fiscal permanecem os mesmos; apenas o provider
-e as referências internas mudam para `gcp:NOME@VERSAO`.
+poderão ser descriptografados. Em produção, configure o Cloud Storage para os
+arquivos A1 e o Secret Manager para suas senhas, conforme
+`docs/deploy-fiscal-storage-gcp.md`. O contrato HTTP do frontend permanece o
+mesmo; as referências passam a ser `gcs:` e `gcp:`.
 
 ## Preparação para produção
 

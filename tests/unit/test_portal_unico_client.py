@@ -142,7 +142,7 @@ def test_default_resolver_rejects_unknown_provider():
 
     with pytest.raises(
         PortalUnicoIntegrationError,
-        match="local:, env: ou gcp:",
+        match="local:, env:, gcp: ou gcp-managed:",
     ):
         resolver.resolve("database:PORTAL_UNICO", role_type="IMPEXP")
 
