@@ -635,7 +635,11 @@ class UrllibJsonTransport:
             body = exc.read()
             if is_maintenance_page(exc.geturl(), body) or exc.code in {502, 503, 504}:
                 raise PortalUnicoServiceUnavailableError("Portal Único indisponível.") from None
-            payload = self._decode_json(body)
+            try:
+                payload = self._decode_json(body)
+            except PortalUnicoIntegrationError:
+                # Preserve o HTTP status mesmo quando a resposta de erro vier como HTML.
+                payload = {}
             error_code, message = self._api_error_details(payload)
             raise PortalUnicoApiError(
                 message or f"Portal Único retornou HTTP {exc.code}.",
