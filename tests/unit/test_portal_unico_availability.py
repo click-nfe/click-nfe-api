@@ -71,3 +71,21 @@ def test_upstream_validation_is_available_but_not_valid_credentials(monkeypatch)
     with raises(PortalUnicoApiError) as failure:
         UrllibJsonTransport().request("POST", availability.PROBE_URL)
     assert failure.value.status_code == 422
+
+
+def test_html_http_422_keeps_validation_classification(monkeypatch):
+    from io import BytesIO
+    from urllib.error import HTTPError
+    from pytest import raises
+    from app.integrations.portal_unico import PortalUnicoApiError
+
+    def reject(*_args, **_kwargs):
+        raise HTTPError(
+            availability.PROBE_URL, 422, "validation",
+            {"Content-Type": "text/html"}, BytesIO(b"<html>validation error</html>"),
+        )
+
+    monkeypatch.setattr("app.integrations.portal_unico.client.urlopen", reject)
+    with raises(PortalUnicoApiError) as failure:
+        UrllibJsonTransport().request("POST", availability.PROBE_URL)
+    assert failure.value.status_code == 422
