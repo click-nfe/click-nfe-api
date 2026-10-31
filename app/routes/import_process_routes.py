@@ -6,7 +6,10 @@ from marshmallow import ValidationError
 
 from ..auth import auth_required
 from ..extensions import db
-from ..integrations.portal_unico import portal_credential_resolver_from_config
+from ..integrations.portal_unico import (
+    PortalUnicoServiceUnavailableError,
+    portal_credential_resolver_from_config,
+)
 from ..models.import_process import (
     DuimpSnapshot,
     ExternalAuthType,
@@ -543,6 +546,12 @@ def fetch_process_duimp(process_id: str):
     except ValueError as exc:
         db.session.rollback()
         return bad_request_response(exc)
+    except PortalUnicoServiceUnavailableError:
+        db.session.rollback()
+        return jsonify({
+            "error": "portal_unico_service_unavailable",
+            "message": "Serviço Indisponível. Consulte a disponibilidade do Portal Único e tente novamente mais tarde.",
+        }), 503
     except Exception as exc:
         db.session.rollback()
         return jsonify(
