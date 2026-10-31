@@ -4,10 +4,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable
 
+from flask import current_app
+
 from app.extensions import db
 from app.integrations.portal_unico import (
     PortalCredentialStore,
     PortalUnicoApiError,
+    PortalUnicoConnectionError,
+    PortalUnicoServiceUnavailableError,
     PortalUnicoCredentials,
     PortalUnicoDuimpGateway,
     PortalUnicoIntegrationError,
@@ -115,6 +119,7 @@ class PortalUnicoSettingsService:
             }
             connection.last_healthcheck_at = None
             connection.last_error = None
+            connection.config_json.pop("last_error_code", None)
             connection.updated_at = now
             db.session.flush()
             return PortalCredentialRotation(
@@ -136,11 +141,13 @@ class PortalUnicoSettingsService:
         config = dict(connection.config_json or {})
         role_type = config.get("role_type") or self.ROLE_TYPE
         now = datetime.utcnow()
+        stage = "credential_store"
         try:
             credentials = self.credential_resolver.resolve(
                 connection.credentials_ref,
                 role_type=role_type,
             )
+            stage = "portal"
             gateway = self.gateway_factory(
                 credentials,
                 self.ENVIRONMENT,
@@ -148,7 +155,12 @@ class PortalUnicoSettingsService:
             )
             gateway.healthcheck()
         except (PortalUnicoApiError, PortalUnicoIntegrationError) as exc:
-            message = self._healthcheck_error(exc)
+            code, message = self._healthcheck_failure(exc, stage)
+            current_app.logger.warning(
+                "portal_unico_healthcheck_failed stage=%s category=%s upstream_status=%s",
+                stage, code, getattr(exc, "status_code", None),
+            )
+            connection.config_json = {**config, "last_error_code": code}
             connection.status = ExternalConnectionStatus.ERROR.value
             connection.last_healthcheck_at = now
             connection.last_error = message
@@ -163,6 +175,7 @@ class PortalUnicoSettingsService:
         connection.status = ExternalConnectionStatus.ACTIVE.value
         connection.last_healthcheck_at = now
         connection.last_error = None
+        connection.config_json = {key: value for key, value in config.items() if key != "last_error_code"}
         connection.updated_at = now
         db.session.flush()
         return self.public_data(connection)
@@ -188,6 +201,7 @@ class PortalUnicoSettingsService:
                 "credential_storage_provider": None,
                 "last_healthcheck_at": None,
                 "last_error": None,
+                "last_error_code": None,
                 "blockers": [
                     {
                         "code": "portal_unico_not_configured",
@@ -218,7 +232,11 @@ class PortalUnicoSettingsService:
         elif state == "error":
             blockers.append(
                 {
-                    "code": "portal_unico_connection_error",
+                    "code": (
+                        "portal_unico_service_unavailable"
+                        if config.get("last_error_code") == "service_unavailable"
+                        else "portal_unico_connection_error"
+                    ),
                     "message": connection.last_error
                     or "A conexão com o Portal Único precisa ser validada novamente.",
                 }
@@ -247,6 +265,7 @@ class PortalUnicoSettingsService:
                 connection.last_healthcheck_at
             ),
             "last_error": connection.last_error,
+            "last_error_code": config.get("last_error_code"),
             "blockers": blockers,
         }
 
@@ -294,13 +313,23 @@ class PortalUnicoSettingsService:
         return f"••••{visible}"
 
     @staticmethod
-    def _healthcheck_error(exc: Exception) -> str:
-        if isinstance(exc, PortalUnicoApiError) and exc.status_code in {
-            401,
-            403,
-        }:
-            return "O Portal Único rejeitou o Client-Id ou o Client-Secret."
-        return "Não foi possível autenticar no Portal Único neste momento."
+    def _healthcheck_failure(exc: Exception, stage: str) -> tuple[str, str]:
+        if stage == "credential_store":
+            return ("credential_store_error", "Não foi possível ler as credenciais protegidas. Contate o suporte.")
+        if isinstance(exc, PortalUnicoServiceUnavailableError) or (
+            isinstance(exc, PortalUnicoApiError) and exc.status_code in {502, 503, 504}
+        ):
+            return ("service_unavailable", "Serviço Indisponível. O Portal Único sinalizou manutenção ou indisponibilidade. Consulte o serviço e tente novamente mais tarde.")
+        if isinstance(exc, PortalUnicoApiError):
+            if exc.status_code in {401, 403}:
+                return ("credentials_rejected", "O Portal Único rejeitou a chave ou o acesso ao perfil IMPEXP. Confira as credenciais e a habilitação do perfil.")
+            if exc.status_code == 429:
+                return ("rate_limited", "O Portal Único limitou as tentativas de autenticação. Aguarde pelo menos 60 segundos antes de testar novamente.")
+            if exc.status_code == 422:
+                return ("portal_validation_error", "O Portal Único recusou a autenticação. Confira a validade da chave e a habilitação do perfil IMPEXP.")
+        if isinstance(exc, PortalUnicoConnectionError):
+            return ("connectivity_error", "Não foi possível alcançar o Portal Único a partir da API. Tente novamente mais tarde ou contate o suporte.")
+        return ("unexpected_response", "A resposta do Portal Único não permitiu validar a conexão. Tente novamente mais tarde ou contate o suporte.")
 
     @staticmethod
     def _enum_value(value: Any) -> str:
@@ -308,4 +337,4 @@ class PortalUnicoSettingsService:
 
     @staticmethod
     def _iso(value: datetime | None) -> str | None:
-        return value.isoformat() if value else None
+        return value.isoformat()

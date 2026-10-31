@@ -6,7 +6,7 @@ import pytest
 
 from app import create_app
 from app.extensions import db
-from app.integrations.portal_unico import PortalUnicoApiError
+from app.integrations.portal_unico import PortalUnicoApiError, PortalUnicoServiceUnavailableError
 from app.integrations.portal_unico.client import (
     DefaultPortalCredentialResolver, GcpManagedPortalCredentialStore,
 )
@@ -274,9 +274,8 @@ def test_failed_healthcheck_persists_only_safe_error(api):
     body = tested.get_json()
     assert body["state"] == "error"
     assert body["ready_for_duimp"] is False
-    assert body["message"] == (
-        "O Portal Único rejeitou o Client-Id ou o Client-Secret."
-    )
+    assert body["last_error_code"] == "credentials_rejected"
+    assert "perfil IMPEXP" in body["message"]
     assert "secret-value" not in tested.get_data(as_text=True)
 
 
@@ -288,3 +287,58 @@ def test_healthcheck_requires_configuration(api):
 
     assert response.status_code == 409
     assert "Configure o Client-Id" in response.get_json()["message"]
+
+
+def test_official_maintenance_returns_503_without_marking_credentials_invalid(api):
+    class MaintenanceGateway:
+        def healthcheck(self):
+            raise PortalUnicoServiceUnavailableError("Portal Único em manutenção.")
+
+    api["app"].config["PORTAL_UNICO_GATEWAY_FACTORY"] = lambda *_args: MaintenanceGateway()
+    assert _configure(api["client"], api["admin_headers"]).status_code == 200
+
+    response = api["client"].post(
+        "/organizations/me/integrations/portal-unico/test", headers=api["admin_headers"]
+    )
+    assert response.status_code == 503
+    body = response.get_json()
+    assert body["last_error_code"] == "service_unavailable"
+    assert body["blockers"][0]["code"] == "portal_unico_service_unavailable"
+    assert "Serviço Indisponível" in body["message"]
+    assert "secret-value" not in response.get_data(as_text=True)
+
+    saved = api["client"].get(
+        "/organizations/me/integrations/portal-unico", headers=api["admin_headers"]
+    ).get_json()
+    assert saved["last_error_code"] == "service_unavailable"
+
+
+def test_provider_422_is_not_labeled_as_outage(api):
+    class InvalidProfileGateway:
+        def healthcheck(self):
+            raise PortalUnicoApiError("provider echoed secret-value", status_code=422)
+
+    api["app"].config["PORTAL_UNICO_GATEWAY_FACTORY"] = lambda *_args: InvalidProfileGateway()
+    assert _configure(api["client"], api["admin_headers"]).status_code == 200
+    response = api["client"].post(
+        "/organizations/me/integrations/portal-unico/test", headers=api["admin_headers"]
+    )
+    assert response.status_code == 422
+    body = response.get_json()
+    assert body["last_error_code"] == "portal_validation_error"
+    assert "Serviço Indisponível" not in body["message"]
+    assert "secret-value" not in response.get_data(as_text=True)
+
+
+def test_availability_is_independent_of_organization_credentials(api, monkeypatch):
+    from app.integrations.portal_unico import availability
+
+    monkeypatch.setattr(availability, "_cache", None)
+    monkeypatch.setattr(availability, "_probe", lambda: "unavailable")
+    response = api["client"].get(
+        "/organizations/me/integrations/portal-unico/availability",
+        headers=api["operator_headers"],
+    )
+    assert response.status_code == 200
+    assert response.get_json()["state"] == "unavailable"
+    assert "client_secret" not in response.get_data(as_text=True)

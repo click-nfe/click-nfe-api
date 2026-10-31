@@ -5,6 +5,7 @@ from marshmallow import ValidationError
 from ..auth import admin_required, auth_required
 from ..cnpj import is_valid_cnpj, normalize_cnpj
 from ..extensions import db
+from ..integrations.portal_unico.availability import portal_unico_availability
 from ..integrations.portal_unico import (
     PortalUnicoIntegrationError,
     portal_credential_resolver_from_config,
@@ -100,6 +101,12 @@ def update_my_organization():
     return jsonify({"organization": organization_schema.dump(org)})
 
 
+@organization_bp.get("/me/integrations/portal-unico/availability")
+@auth_required
+def get_portal_unico_availability():
+    return jsonify(portal_unico_availability())
+
+
 @organization_bp.get("/me/integrations/portal-unico")
 @auth_required
 def get_portal_unico_settings():
@@ -160,7 +167,7 @@ def test_portal_unico_connection():
                 "message": str(exc),
                 **exc.result,
             }
-        ), 422
+        ), 503 if exc.result.get("last_error_code") == "service_unavailable" else 422
     except PortalUnicoSettingsError as exc:
         db.session.rollback()
         return _portal_error(exc, 409)
