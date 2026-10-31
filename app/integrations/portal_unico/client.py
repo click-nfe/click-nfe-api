@@ -17,6 +17,8 @@ from urllib.request import Request, urlopen
 
 from cryptography.fernet import Fernet, InvalidToken
 
+from .availability import is_maintenance_page
+
 
 class PortalUnicoIntegrationError(RuntimeError):
     """Falha de configuração, transporte ou contrato do Portal Único."""
@@ -33,6 +35,14 @@ class PortalUnicoApiError(PortalUnicoIntegrationError):
         super().__init__(message)
         self.status_code = status_code
         self.error_code = error_code
+
+
+class PortalUnicoServiceUnavailableError(PortalUnicoIntegrationError):
+    """Manutenção oficial ou resposta 502/503/504 do Portal."""
+
+
+class PortalUnicoConnectionError(PortalUnicoIntegrationError):
+    """Falha na conexão de saída, sem evidência de indisponibilidade do Portal."""
 
 
 @dataclass(frozen=True)
@@ -613,6 +623,8 @@ class UrllibJsonTransport:
         try:
             with urlopen(request, timeout=timeout_seconds) as response:
                 body = response.read()
+                if is_maintenance_page(response.geturl(), body):
+                    raise PortalUnicoServiceUnavailableError("Portal Único em manutenção.")
                 payload = self._decode_json(body)
                 return PortalUnicoResponse(
                     status_code=response.status,
@@ -620,7 +632,10 @@ class UrllibJsonTransport:
                     payload=payload,
                 )
         except HTTPError as exc:
-            payload = self._decode_json(exc.read())
+            body = exc.read()
+            if is_maintenance_page(exc.geturl(), body) or exc.code in {502, 503, 504}:
+                raise PortalUnicoServiceUnavailableError("Portal Único indisponível.") from None
+            payload = self._decode_json(body)
             error_code, message = self._api_error_details(payload)
             raise PortalUnicoApiError(
                 message or f"Portal Único retornou HTTP {exc.code}.",
@@ -628,7 +643,7 @@ class UrllibJsonTransport:
                 error_code=error_code,
             ) from exc
         except (URLError, TimeoutError, socket.timeout) as exc:
-            raise PortalUnicoIntegrationError(
+            raise PortalUnicoConnectionError(
                 "Não foi possível conectar ao Portal Único."
             ) from exc
 
