@@ -52,7 +52,7 @@ def test_network_error_does_not_claim_portal_is_offline(monkeypatch):
     assert availability._probe() == "unknown"
 
 
-def test_upstream_validation_is_available_but_not_valid_credentials(monkeypatch):
+def test_authentication_validation_does_not_claim_public_site_available(monkeypatch):
     from io import BytesIO
     from urllib.error import HTTPError
     from pytest import raises
