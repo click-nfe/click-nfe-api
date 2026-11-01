@@ -5334,10 +5334,10 @@ class ImportNfeService:
                     "field": f"{prefix}.product_code",
                     "message": "Informe o código do produto usado pelo emitente na NF-e (cProd). O código do Catálogo da DUIMP não é preenchido automaticamente.",
                 })
-            if len(product_code) > 80:
+            if len(product_code) > 60:
                 errors.append({
                     "field": f"{prefix}.product_code",
-                    "message": "Código do produto deve ter no máximo 80 caracteres.",
+                    "message": "Código do produto deve ter no máximo 60 caracteres.",
                 })
             description = str(item.get("description") or "").strip()
             if not description:
