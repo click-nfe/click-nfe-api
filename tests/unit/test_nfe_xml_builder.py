@@ -379,7 +379,8 @@ def test_builds_xsd_valid_diagnostic_icms51_without_nominal_values():
     assert icms51.find("nfe:pICMS", NS) is None
     assert icms51.find("nfe:vICMSOp", NS) is None
     assert icms51.find("nfe:vICMSDif", NS) is None
-    assert root.findtext(".//nfe:adi/nfe:nAdicao", namespaces=NS) == "2"
+    assert root.find(".//nfe:adi/nfe:nAdicao", NS) is None
+    assert root.findtext(".//nfe:adi/nfe:nSeqAdic", namespaces=NS) == "1"
     assert NfeXsdValidator().validate(xml, allow_unsigned=True).is_valid is True
 
 
@@ -449,3 +450,28 @@ def test_builds_xsd_valid_diagnostic_icms40_without_nominal_values():
     assert icms40.find("nfe:vICMSDeson", NS) is None
     assert icms40.find("nfe:motDesICMS", NS) is None
     assert NfeXsdValidator().validate(xml, allow_unsigned=True).is_valid is True
+
+def test_duimp_item_number_is_not_inferred_from_invoice_position():
+    data = payload()
+    data["items"][0]["import_payload"]["sequence_number"] = "00005"
+    data["items"][0]["import_payload"]["addition_number"] = "2"
+
+    xml = NfeXmlBuilder().build(
+        data,
+        access_key="41260700000000000191550010000144221763362375",
+    )
+    root = ET.fromstring(xml)
+    assert root.findtext(".//nfe:det[@nItem='1']/nfe:prod/nfe:cProd", namespaces=NS) == "PROD-001"
+    assert root.findtext(".//nfe:adi/nfe:nSeqAdic", namespaces=NS) == "5"
+    assert root.find(".//nfe:adi/nfe:nAdicao", NS) is None
+    assert NfeXsdValidator().validate(xml, allow_unsigned=True).is_valid is True
+
+
+def test_duimp_item_number_missing_does_not_fall_back_to_one():
+    data = payload()
+    data["items"][0]["import_payload"].pop("sequence_number")
+    with pytest.raises(ValueError, match="nSeqAdic"):
+        NfeXmlBuilder().build(
+            data,
+            access_key="41260700000000000191550010000144221763362375",
+        )
