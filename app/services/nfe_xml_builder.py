@@ -178,8 +178,13 @@ class NfeXmlBuilder:
             self._text(di, "UFTerceiro", duimp.get("third_party_state"))
         self._text(di, "cExportador", data.get("exporter_code") or duimp.get("exporter_code"))
         addition = ET.SubElement(di, self._tag("adi"))
-        self._optional(addition, "nAdicao", data.get("addition_number"))
-        self._text(addition, "nSeqAdic", data.get("sequence_number") or "1")
+        # Para DUIMP, nAdicao deve ser omitido. Nunca usar 1 como fallback
+        # para o item da declaração, pois isso vincula itens distintos ao
+        # mesmo item aduaneiro.
+        sequence = str(data.get("sequence_number") or "").strip()
+        if not sequence.isdigit() or not 1 <= int(sequence) <= 99999:
+            raise ValueError("Número real do item da DUIMP (nSeqAdic) é obrigatório.")
+        self._text(addition, "nSeqAdic", str(int(sequence)))
         self._text(addition, "cFabricante", data.get("manufacturer_code") or "0000")
         self._optional(addition, "nDraw", data.get("drawback_number"))
 

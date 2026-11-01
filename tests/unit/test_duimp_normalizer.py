@@ -197,10 +197,11 @@ def test_normalizes_duimp_additions_units_description_and_missing_manufacturer()
     result = DuimpNormalizer().normalize(payload)
 
     first_result, second_result = result["items"]
-    assert first_result["addition_number"] == "1"
+    assert first_result["addition_number"] is None
     assert first_result["sequence_number"] == "1"
-    assert second_result["addition_number"] == "2"
-    assert second_result["sequence_number"] == "1"
+    assert second_result["addition_number"] is None
+    assert second_result["sequence_number"] == "2"
+    assert second_result["number"] == "2"
     assert first_result["commercial_unit"] == "UN"
     assert first_result["taxable_unit"] == "UN"
     assert len(first_result["description"]) <= 120

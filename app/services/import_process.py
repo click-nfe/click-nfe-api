@@ -5012,10 +5012,10 @@ class ImportNfeService:
                 {
                     "item_number": index,
                     "duimp_item_number": item["number"],
-                    # Snapshots capturados antes da separação do código do
-                    # Catálogo também não podem preencher cProd por inferência.
+                    # cProd é um código do emitente. Sem cadastro confirmado,
+                    # geramos uma referência provisória por linha da NF-e.
                     "product_code": (
-                        ""
+                        f"{index:05d}"
                         if (duimp.get("raw") or {}).get("provider")
                         == "portal_unico"
                         else item["product_code"]
@@ -5066,8 +5066,26 @@ class ImportNfeService:
                             )
                         ),
                         "catalog_product_id": item.get("catalog_product_id"),
-                        "addition_number": item.get("addition_number"),
-                        "sequence_number": item.get("sequence_number"),
+                        "product_code_source": (
+                            "generated_sequence"
+                            if (duimp.get("raw") or {}).get("provider")
+                            == "portal_unico"
+                            else "source"
+                        ),
+                        # Reinterpreta também snapshots antigos, que associavam
+                        # indevidamente os itens de DUIMP a adições artificiais.
+                        "addition_number": (
+                            None
+                            if (duimp.get("raw") or {}).get("provider")
+                            == "portal_unico"
+                            else item.get("addition_number")
+                        ),
+                        "sequence_number": (
+                            item["number"]
+                            if (duimp.get("raw") or {}).get("provider")
+                            == "portal_unico"
+                            else item.get("sequence_number")
+                        ),
                         "manufacturer_code": manufacturer_code,
                         "manufacturer_code_source": (
                             "fallback_missing_portal_code"
@@ -5316,10 +5334,10 @@ class ImportNfeService:
                     "field": f"{prefix}.product_code",
                     "message": "Informe o código do produto usado pelo emitente na NF-e (cProd). O código do Catálogo da DUIMP não é preenchido automaticamente.",
                 })
-            if len(product_code) > 80:
+            if len(product_code) > 60:
                 errors.append({
                     "field": f"{prefix}.product_code",
-                    "message": "Código do produto deve ter no máximo 80 caracteres.",
+                    "message": "Código do produto deve ter no máximo 60 caracteres.",
                 })
             description = str(item.get("description") or "").strip()
             if not description:
@@ -5341,8 +5359,15 @@ class ImportNfeService:
                 errors.append({"field": f"{prefix}.commercial_quantity", "message": "Quantidade comercial deve ser maior que zero."})
             if self._decimal(item.get("product_value")) <= 0:
                 errors.append({"field": f"{prefix}.product_value", "message": "Valor do produto deve ser maior que zero."})
-            if not item.get("import_payload"):
+            import_payload = item.get("import_payload") or {}
+            if not import_payload:
                 errors.append({"field": f"{prefix}.import_payload", "message": "Dados de importação são obrigatórios."})
+            sequence = str(import_payload.get("sequence_number") or "").strip()
+            if not sequence.isdigit() or not 1 <= int(sequence) <= 99999:
+                errors.append({
+                    "field": f"{prefix}.import_payload.sequence_number",
+                    "message": "Informe o número real do item da DUIMP (nSeqAdic), de 1 a 99999. Ele não pode ser presumido pela posição na nota.",
+                })
             taxes = item.get("tax_payload") or {}
             missing_taxes = [
                 tax for tax in ("icms", "ipi", "ii", "pis", "cofins")
