@@ -5012,7 +5012,14 @@ class ImportNfeService:
                 {
                     "item_number": index,
                     "duimp_item_number": item["number"],
-                    "product_code": item["product_code"],
+                    # Snapshots capturados antes da separação do código do
+                    # Catálogo também não podem preencher cProd por inferência.
+                    "product_code": (
+                        ""
+                        if (duimp.get("raw") or {}).get("provider")
+                        == "portal_unico"
+                        else item["product_code"]
+                    ),
                     "description": item["description"],
                     "additional_info": item_additional_info,
                     "ncm": item["ncm"],
@@ -5049,6 +5056,16 @@ class ImportNfeService:
                         "duimp_version": duimp.get("version"),
                         "registration_date": duimp.get("registration_date"),
                         "duimp_item_number": item["number"],
+                        "catalog_product_code": (
+                            item.get("catalog_product_code")
+                            or (
+                                item.get("product_code")
+                                if (duimp.get("raw") or {}).get("provider")
+                                == "portal_unico"
+                                else None
+                            )
+                        ),
+                        "catalog_product_id": item.get("catalog_product_id"),
                         "addition_number": item.get("addition_number"),
                         "sequence_number": item.get("sequence_number"),
                         "manufacturer_code": manufacturer_code,
@@ -5293,6 +5310,17 @@ class ImportNfeService:
 
         for index, item in enumerate(items, start=1):
             prefix = f"items[{index}]"
+            product_code = str(item.get("product_code") or "").strip()
+            if not product_code:
+                errors.append({
+                    "field": f"{prefix}.product_code",
+                    "message": "Informe o código do produto usado pelo emitente na NF-e (cProd). O código do Catálogo da DUIMP não é preenchido automaticamente.",
+                })
+            if len(product_code) > 80:
+                errors.append({
+                    "field": f"{prefix}.product_code",
+                    "message": "Código do produto deve ter no máximo 80 caracteres.",
+                })
             description = str(item.get("description") or "").strip()
             if not description:
                 errors.append({"field": f"{prefix}.description", "message": "Descrição do item é obrigatória."})
