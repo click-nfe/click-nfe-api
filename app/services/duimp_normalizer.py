@@ -163,16 +163,23 @@ class DuimpNormalizer:
         )
         addition_number, sequence_number = addition_reference or ("1", "1")
         manufacturer_code = self._string(manufacturer.get("codigo"))
+        catalog_codes = catalog.get("codigosInterno")
+        if isinstance(catalog_codes, list):
+            catalog_code = next((code for code in catalog_codes if code), None)
+        else:
+            catalog_code = catalog_codes if isinstance(catalog_codes, str) else None
 
         return {
             "number": str(identification.get("numeroItem") or ""),
-            "product_code": str(
+            # O código interno do Catálogo não identifica necessariamente o
+            # cProd adotado pelo emitente na NF-e. Mantê-lo só como referência.
+            "product_code": "",
+            "catalog_product_code": self._string(
                 product.get("codigoInternoNfe")
                 or product.get("codigoInterno")
-                or product.get("codigo")
-                or identification.get("numeroItem")
-                or ""
+                or catalog_code
             ),
+            "catalog_product_id": self._string(product.get("codigo")),
             "product_version": self._string(product.get("versao")),
             "description": description,
             "additional_info": additional_info,
