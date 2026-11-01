@@ -164,7 +164,9 @@ def test_normalizes_catalog_enrichment_into_fiscal_product_fields():
     result = DuimpNormalizer().normalize(payload)
 
     assert result["catalog_enrichment"]["products_enriched"] == 1
-    assert result["items"][0]["product_code"] == "PROD-INT-001"
+    assert result["items"][0]["product_code"] == ""
+    assert result["items"][0]["catalog_product_code"] == "PROD-INT-001"
+    assert result["items"][0]["catalog_product_id"] == "215"
     assert result["items"][0]["description"] == "Roda automotiva detalhada"
     assert result["foreign_supplier"]["foreign_tax_id"] == (
         "FOREIGN-TAX-ID-001"
@@ -268,3 +270,17 @@ def test_maps_supported_import_modalities(portal_value, expected):
     assert result["import_modality"] == expected
     if expected != "direct":
         assert result["third_party_tax_id"] == "00000000000272"
+
+def test_portal_catalog_code_is_not_assumed_to_be_nfe_cprod():
+    payload = portal_payload()
+    payload["itens"][0]["produto"]["codigo"] = 204
+    payload["itens"][0]["produto"]["catalogo"] = {
+        "codigosInterno": ["Gray Pipe Gray"]
+    }
+
+    item = DuimpNormalizer().normalize(payload)["items"][0]
+
+    assert item["catalog_product_id"] == "204"
+    assert item["catalog_product_code"] == "Gray Pipe Gray"
+    assert item["product_code"] == ""
+
