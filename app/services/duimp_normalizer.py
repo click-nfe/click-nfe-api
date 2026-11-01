@@ -42,16 +42,7 @@ class DuimpNormalizer:
             payload.get("numero") or identification.get("numero")
         )
         version = payload.get("versao") or identification.get("versao")
-        addition_references = self._addition_references(general)
-        items = [
-            self._normalize_portal_item(
-                item,
-                addition_reference=addition_references.get(
-                    str((item.get("identificacao") or {}).get("numeroItem") or "")
-                ),
-            )
-            for item in raw_items
-        ]
+        items = [self._normalize_portal_item(item) for item in raw_items]
         modalities = {item.get("import_modality") for item in items if item.get("import_modality")}
         third_party_ids = {
             item.get("third_party_tax_id")
@@ -117,12 +108,7 @@ class DuimpNormalizer:
             "raw": payload,
         }
 
-    def _normalize_portal_item(
-        self,
-        raw_item: dict[str, Any],
-        *,
-        addition_reference: tuple[str, str] | None = None,
-    ) -> dict[str, Any]:
+    def _normalize_portal_item(self, raw_item: dict[str, Any]) -> dict[str, Any]:
         identification = raw_item.get("identificacao") or {}
         product = raw_item.get("produto") or {}
         merchandise = raw_item.get("mercadoria") or {}
@@ -161,7 +147,6 @@ class DuimpNormalizer:
             or merchandise.get("descricao"),
             catalog.get("descricao"),
         )
-        addition_number, sequence_number = addition_reference or ("1", "1")
         manufacturer_code = self._string(manufacturer.get("codigo"))
         catalog_codes = catalog.get("codigosInterno")
         if isinstance(catalog_codes, list):
@@ -199,12 +184,10 @@ class DuimpNormalizer:
             ),
             "taxable_quantity": str(quantity),
             "taxable_unit_value": str(unit_value),
-            "addition_number": self._string(
-                raw_item.get("numeroAdicao") or addition_number
-            ),
-            "sequence_number": self._string(
-                raw_item.get("sequenciaAdicao") or sequence_number
-            ),
+            # Para DUIMP, nAdicao não é informado. nSeqAdic identifica o
+            # número real do item da declaração, e não a posição na NF-e.
+            "addition_number": None,
+            "sequence_number": self._string(identification.get("numeroItem")),
             "manufacturer_code": manufacturer_code,
             "manufacturer_code_missing_from_portal": (
                 "fabricante" in raw_item and manufacturer_code is None
@@ -444,17 +427,6 @@ class DuimpNormalizer:
             afrmm = reference.get("dadosAfrmmTum") or {}
             total += self._decimal(afrmm.get("valorDevido") or afrmm.get("valorPago"))
         return total
-
-    @staticmethod
-    def _addition_references(general: dict[str, Any]) -> dict[str, tuple[str, str]]:
-        references: dict[str, tuple[str, str]] = {}
-        for addition in general.get("adicoes") or []:
-            addition_number = str(addition.get("numero") or "").strip()
-            if not addition_number:
-                continue
-            for sequence, item_number in enumerate(addition.get("itens") or [], start=1):
-                references[str(item_number)] = (addition_number, str(sequence))
-        return references
 
     def _sale_adjustment(self, sale: dict[str, Any], adjustment_type: str) -> Decimal:
         return sum(
