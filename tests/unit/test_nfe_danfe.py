@@ -1,8 +1,10 @@
 import subprocess
+from xml.etree import ElementTree as ET
 
 import pytest
 
 from app.services.nfe_danfe import DanfeError, render_authorized_danfe
+from app.services.nfe_danfe_preview import DanfePreviewError, render_danfe_preview
 
 
 NS = "http://www.portalfiscal.inf.br/nfe"
@@ -66,3 +68,38 @@ def test_rejects_different_persisted_identity():
         render_authorized_danfe(authorized_xml(), expected_key="0" * 44)
     with pytest.raises(DanfeError):
         render_authorized_danfe(authorized_xml(), expected_protocol="0" * 15)
+
+
+def unsigned_preview_xml(*, items=1):
+    root = ET.fromstring(authorized_xml(items=items))
+    nfe = root.find(f"{{{NS}}}NFe")
+    assert nfe is not None
+    return ET.tostring(nfe, encoding="unicode")
+
+
+def test_preview_uses_standard_danfe_layout_and_marks_every_page():
+    pdf = render_danfe_preview(unsigned_preview_xml(items=80))
+    assert pdf.startswith(b"%PDF-")
+    text = subprocess.run(["pdftotext", "-layout", "-", "-"], input=pdf,
+                          capture_output=True, check=True).stdout.decode()
+    pages = [page for page in text.split("\f") if page.strip()]
+    assert len(pages) > 1
+    assert "DANFE" in text and "Produto 1" in text and "Produto 80" in text
+    assert all("SEM VALOR FISCAL" in page for page in pages)
+    assert all("PREVIA" in page for page in pages)
+    assert PROTOCOL not in text
+    assert f"FOLHA 1/{len(pages)}" in text
+
+
+def test_preview_rejects_authorized_xml_instead_of_disguising_it():
+    with pytest.raises(DanfePreviewError, match="sem protocolo"):
+        render_danfe_preview(authorized_xml())
+
+
+def test_preview_rejects_unsupported_invoice_model():
+    root = ET.fromstring(unsigned_preview_xml())
+    model = root.find(f".//{{{NS}}}mod")
+    assert model is not None
+    model.text = "65"
+    with pytest.raises(DanfePreviewError, match="dados necessários"):
+        render_danfe_preview(ET.tostring(root, encoding="unicode"))
