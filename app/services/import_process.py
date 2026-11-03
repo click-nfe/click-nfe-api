@@ -5083,6 +5083,15 @@ class ImportNfeService:
         item_classifications = item_classifications or {}
 
         for index, item in enumerate(duimp.get("items", []), start=1):
+            from_portal = (duimp.get("raw") or {}).get("provider") == "portal_unico"
+            portal_product_code = str(item.get("catalog_product_id") or "").strip() if from_portal else ""
+            if len(portal_product_code) > 60:
+                portal_product_code = ""
+            internal_catalog_code = item.get("catalog_internal_code")
+            if from_portal and not internal_catalog_code:
+                previous_code = item.get("catalog_product_code")
+                if previous_code and str(previous_code).strip() != portal_product_code:
+                    internal_catalog_code = previous_code
             classification = item_classifications.get(str(item["number"]))
             item_purpose = (
                 classification.import_purpose
@@ -5121,12 +5130,12 @@ class ImportNfeService:
                 {
                     "item_number": index,
                     "duimp_item_number": item["number"],
-                    # cProd é um código do emitente. Sem cadastro confirmado,
-                    # geramos uma referência provisória por linha da NF-e.
+                    # O código da coluna "Código do Produto" da DUIMP é o
+                    # valor inicial editável do cProd. Snapshots antigos ainda
+                    # trazem esse valor em catalog_product_id.
                     "product_code": (
-                        f"{index:05d}"
-                        if (duimp.get("raw") or {}).get("provider")
-                        == "portal_unico"
+                        portal_product_code or f"{index:05d}"
+                        if from_portal
                         else item["product_code"]
                     ),
                     "description": item["description"],
@@ -5165,20 +5174,12 @@ class ImportNfeService:
                         "duimp_version": duimp.get("version"),
                         "registration_date": duimp.get("registration_date"),
                         "duimp_item_number": item["number"],
-                        "catalog_product_code": (
-                            item.get("catalog_product_code")
-                            or (
-                                item.get("product_code")
-                                if (duimp.get("raw") or {}).get("provider")
-                                == "portal_unico"
-                                else None
-                            )
-                        ),
+                        "catalog_product_code": portal_product_code if from_portal else item.get("catalog_product_code"),
+                        "catalog_internal_code": internal_catalog_code,
                         "catalog_product_id": item.get("catalog_product_id"),
                         "product_code_source": (
-                            "generated_sequence"
-                            if (duimp.get("raw") or {}).get("provider")
-                            == "portal_unico"
+                            "portal_product_code" if portal_product_code else "generated_sequence"
+                            if from_portal
                             else "source"
                         ),
                         # Reinterpreta também snapshots antigos, que associavam
@@ -5441,7 +5442,7 @@ class ImportNfeService:
             if not product_code:
                 errors.append({
                     "field": f"{prefix}.product_code",
-                    "message": "Informe o código do produto usado pelo emitente na NF-e (cProd). O código do Catálogo da DUIMP não é preenchido automaticamente.",
+                    "message": "Informe o código do produto na NF-e (cProd). Quando disponível, o código da coluna 'Código do Produto' da DUIMP é sugerido e pode ser editado.",
                 })
             if len(product_code) > 60:
                 errors.append({
