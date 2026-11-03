@@ -63,6 +63,7 @@ from app.services.import_tax_calculator import ImportTaxCalculator
 from app.services.nfe_issuance_state import NfeIdempotency
 from app.services.nfe_context import NfeContextResolver
 from app.services.nfe_xml_builder import NfeXmlBuilder
+from app.services.simplified_issuance import draft_defaults, reconcile
 from app.services.nfe_xml_signer import (
     NfeXmlSignatureError,
     NfeXmlSigner,
@@ -452,7 +453,10 @@ class ImportNfeService:
     # ------------------------------------------------------------------
     def create_import_process(self, payload: dict[str, Any]) -> ImportProcess:
         now = datetime.utcnow()
-        self.get_client_for_current_user(payload["importer_id"])
+        client = self.get_client_for_current_user(payload["importer_id"])
+        simplified = payload.get("source") == ImportProcessSource.SIMPLIFIED.value
+        if simplified and not client.simplified_issuance_config:
+            raise ValueError("Configure a emissão simplificada antes de iniciar o processo.")
 
         process = ImportProcess(
             organization_id=self._require_organization_id(),
@@ -464,6 +468,7 @@ class ImportNfeService:
             duimp_number=payload.get("duimp_number"),
             duimp_version=payload.get("duimp_version"),
             source=payload.get("source") or ImportProcessSource.MANUAL.value,
+            simplified_config_snapshot=(deepcopy(client.simplified_issuance_config) if simplified else None),
             status=ImportProcessStatus.CREATED.value,
             created_by_user_id=self.user_id,
             created_at=now,
@@ -474,6 +479,10 @@ class ImportNfeService:
         return process
 
     def update_import_process(self, process: ImportProcess, payload: dict[str, Any]) -> ImportProcess:
+        if payload.get("source") == ImportProcessSource.SIMPLIFIED.value and not process.simplified_config_snapshot:
+            raise ValueError("A emissão simplificada deve ser iniciada pelo perfil do cliente.")
+        if process.simplified_config_snapshot and payload.get("source") not in (None, ImportProcessSource.SIMPLIFIED.value):
+            raise ValueError("A origem da emissão simplificada não pode ser alterada.")
         for field in ["reference_code", "duimp_number", "duimp_version", "status", "source"]:
             if field in payload:
                 setattr(process, field, payload[field])
@@ -1702,6 +1711,8 @@ class ImportNfeService:
         process.duimp_version = payload.get("duimp_version")
         process.status = ImportProcessStatus.DUIMP_FETCHED.value
         process.updated_at = datetime.utcnow()
+        if process.simplified_config_snapshot:
+            self.apply_simplified_classifications(process, snapshot)
         db.session.flush()
         return snapshot
 
@@ -1781,8 +1792,77 @@ class ImportNfeService:
         process.duimp_version = normalized.get("version")
         process.status = ImportProcessStatus.DUIMP_FETCHED.value
         process.updated_at = datetime.utcnow()
+        if process.simplified_config_snapshot:
+            self.apply_simplified_classifications(process, snapshot)
         db.session.flush()
         return {"snapshot": snapshot, "normalized": normalized}
+
+    def simplified_reconciliation(self, process: ImportProcess) -> dict[str, Any]:
+        config = process.simplified_config_snapshot
+        if not config:
+            raise ValueError("Este processo não é uma emissão simplificada.")
+        snapshot = self._snapshot_for_process(process, None)
+        normalized = snapshot.normalized_payload or self.normalize_duimp_payload(snapshot.raw_payload)
+        return {"items": reconcile(config, normalized, process.simplified_item_links), "templates": config.get("items") or [], "snapshot_id": str(snapshot.id)}
+
+    def save_simplified_links(self, process: ImportProcess, links: dict[str, int]) -> dict[str, Any]:
+        if not process.simplified_config_snapshot:
+            raise ValueError("Este processo não é uma emissão simplificada.")
+        snapshot = self._snapshot_for_process(process, None)
+        if self.nfe_draft_query_for_current_user().filter(NfeDraft.import_process_id == process.id).first():
+            raise ValueError("O rascunho já foi criado. Edite os itens no rascunho ou crie um novo processo.")
+        numbers = {str(item.get("number")) for item in (snapshot.normalized_payload or {}).get("items") or []}
+        templates = process.simplified_config_snapshot.get("items") or []
+        if not isinstance(links, dict) or any(str(k) not in numbers or not isinstance(v, int) or isinstance(v, bool) or not 0 <= v < len(templates) for k, v in links.items()):
+            raise ValueError("Associações de itens inválidas.")
+        for number, index in links.items():
+            source = next(item for item in snapshot.normalized_payload["items"] if str(item.get("number")) == str(number))
+            if str(source.get("ncm")) != str(templates[index].get("ncm")):
+                raise ValueError(f"O NCM do item {number} difere do modelo. Revise o produto antes de associar.")
+        process.simplified_item_links = links
+        process.updated_at = datetime.utcnow()
+        self.item_classification_query_for_current_user().filter(
+            NfeItemClassification.duimp_snapshot_id == snapshot.id,
+            NfeItemClassification.source == "simplified",
+        ).delete(synchronize_session=False)
+        db.session.flush()
+        self.apply_simplified_classifications(process, snapshot)
+        db.session.flush()
+        return self.simplified_reconciliation(process)
+
+    def apply_simplified_classifications(self, process: ImportProcess, snapshot: DuimpSnapshot) -> None:
+        config = process.simplified_config_snapshot or {}
+        normalized = snapshot.normalized_payload or {}
+        now = datetime.utcnow()
+        for match in reconcile(config, normalized, process.simplified_item_links):
+            index = match["template_index"]
+            if index is None:
+                continue
+            item = config["items"][index]
+            taxes = {k: v for k, v in (item.get("tax_configuration") or {}).items() if v != ""}
+            if not (item.get("cfop") and item.get("import_purpose") and taxes.get("icms_cst")):
+                continue
+            row = self.item_classification_query_for_current_user().filter(
+                NfeItemClassification.duimp_snapshot_id == snapshot.id,
+                NfeItemClassification.duimp_item_number == match["duimp_item_number"],
+            ).first()
+            if row is not None:
+                # An operator's explicit classification always wins.
+                continue
+            row = NfeItemClassification(
+                organization_id=self._require_organization_id(),
+                import_process_id=process.id,
+                duimp_snapshot_id=snapshot.id,
+                duimp_item_number=match["duimp_item_number"],
+                import_purpose=item["import_purpose"],
+                cfop=item["cfop"],
+                source="simplified",
+                tax_rule_snapshot={"configuration_json": {**taxes, "cfop": item["cfop"]}},
+                created_at=now,
+                updated_at=now,
+            )
+            db.session.add(row)
+        db.session.flush()
 
     def _duimp_gateway_for(
         self, *, process: ImportProcess, payload: dict[str, Any]
@@ -2369,6 +2449,8 @@ class ImportNfeService:
                 purpose_counts[purpose] = purpose_counts.get(purpose, 0) + 1
             if row is None:
                 status = "unclassified"
+            elif row.source == "simplified" and (row.tax_rule_snapshot or {}).get("configuration_json") and row.cfop:
+                status = "classified"
             elif not rule:
                 status = "missing_tax_rule"
             elif not rule_active:
@@ -2472,6 +2554,7 @@ class ImportNfeService:
                         else None
                     ),
                     "status": status,
+                    "source": row.source if row else None,
                     "rule_candidates": rule_candidates[:3],
                     "classified_by": (
                         {
@@ -2535,6 +2618,12 @@ class ImportNfeService:
                     f"Item {item_number} não pertence ao snapshot informado."
                 )
             purpose = requested["import_purpose"]
+            preserved = self.item_classification_query_for_current_user().filter(
+                NfeItemClassification.duimp_snapshot_id == snapshot.id,
+                NfeItemClassification.duimp_item_number == item_number,
+            ).first()
+            if preserved and preserved.source == "simplified" and preserved.import_purpose == purpose and not requested.get("tax_rule_id"):
+                continue
             resolution = self.resolve_import_tax_rule(
                 client_id=process.importer_id,
                 issuer_state=profile.state,
@@ -3320,6 +3409,10 @@ class ImportNfeService:
         planned_document: NfePlannedDocument | None = None,
     ) -> dict[str, Any]:
         payload = self._json_compatible(payload)
+        simplified_config = process.simplified_config_snapshot or {}
+        if simplified_config:
+            for section, defaults in draft_defaults(simplified_config).items():
+                payload[section] = self._merge_defaults(defaults, payload.get(section))
         payload["series"] = payload.get("series") or self.DEFAULT_NFE_SERIES
         fiscal_profile = self.get_importer_fiscal_profile(process.importer_id)
         snapshot_id = payload.get("duimp_snapshot_id")
@@ -3438,8 +3531,8 @@ class ImportNfeService:
                     if row.tax_rule
                 }.values()
             )
-            tax_rule = tax_rules[0]
-            tax_configuration = deepcopy(tax_rule.configuration_json or {})
+            tax_rule = tax_rules[0] if tax_rules else None
+            tax_configuration = deepcopy(tax_rule.configuration_json or {}) if tax_rule else self._classification_tax_configuration(next(iter(classification_map.values())), {})
             payload["import_purpose"] = (
                 payload.get("import_purpose")
                 or next(
@@ -3562,6 +3655,21 @@ class ImportNfeService:
             item_classifications=classification_map or None,
             preallocated_costs=preallocated_costs,
         )
+        if simplified_config:
+            matches = reconcile(simplified_config, normalized, process.simplified_item_links)
+            by_number = {entry["duimp_item_number"]: entry for entry in matches}
+            for item in fiscal_payload["items"]:
+                entry = by_number.get(str(item.get("duimp_item_number")))
+                if not entry or entry["template_index"] is None:
+                    continue
+                template = simplified_config["items"][entry["template_index"]]
+                for source, target in (("product_code", "product_code"), ("description", "description"), ("unit", "commercial_unit")):
+                    if template.get(source):
+                        item[target] = template[source]
+                if template.get("unit"):
+                    item["taxable_unit"] = template["unit"]
+                item.setdefault("import_payload", {})["simplified_template_index"] = entry["template_index"]
+            fiscal_payload["source"]["simplified_issuance"] = True
         fiscal_payload["source"]["tax_configuration_source"] = (
             "client_import_tax_rule" if tax_rule else "request"
         )
