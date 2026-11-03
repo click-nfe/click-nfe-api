@@ -9,7 +9,7 @@ from app.models.import_process import ImportPurpose
 DOCUMENT = {"operation_nature", "presence_indicator", "intermediary_indicator"}
 TRANSPORT = {"freight_mode", "carrier_name", "carrier_tax_id", "carrier_state_registration", "carrier_address", "carrier_city", "carrier_state"}
 ITEM = {"reference", "product_code", "description", "ncm", "cfop", "unit", "import_purpose", "tax_configuration"}
-TAX = {"ii_rate", "ipi_rate", "pis_rate", "cofins_rate", "icms_cst", "icms_origin", "ipi_cst", "pis_cst", "cofins_cst", "icms_rate", "icms_base_reduction_rate"}
+TAX = {"ii_rate", "ipi_rate", "pis_rate", "cofins_rate", "icms_cst", "icms_origin", "ipi_cst", "pis_cst", "cofins_cst", "icms_rate", "icms_base_reduction_rate", "icms_deferment_rate", "icms_st_base_method", "icms_st_mva_rate", "icms_st_base_reduction_rate", "icms_st_rate", "icms_st_retained_base", "icms_st_retained_rate", "icms_st_retained_value", "icms_tax_treatment_confirmed"}
 PAYMENT = {"payment_indicator", "method", "description", "value"}
 VOLUME = {"quantity", "species", "brand", "numbering", "net_weight", "gross_weight"}
 
@@ -90,19 +90,30 @@ def normalize_config(data: object) -> dict:
             raise ValueError(f"Tributação inválida no produto {index}.")
         item["tax_configuration"] = {}
         for key, value in taxes.items():
+            if key == "icms_tax_treatment_confirmed":
+                if value not in (True, False, None):
+                    raise ValueError(f"Confirmação fiscal inválida no produto {index}.")
+                if value is not None:
+                    item["tax_configuration"][key] = value
+                continue
             if not isinstance(value, str):
                 raise ValueError(f"Alíquota inválida no produto {index}: {key}.")
             value = value.strip()
             if value:
-                if key in {"icms_cst", "ipi_cst", "pis_cst", "cofins_cst", "icms_origin"}:
-                    if not value.isdigit() or len(value) > (1 if key == "icms_origin" else 2):
+                if key in {"icms_cst", "ipi_cst", "pis_cst", "cofins_cst", "icms_origin", "icms_st_base_method"}:
+                    if not value.isdigit() or len(value) > (1 if key in {"icms_origin", "icms_st_base_method"} else 2):
                         raise ValueError(f"CST inválido no produto {index}.")
+                    if key == "icms_origin" and value not in "012345678":
+                        raise ValueError(f"Origem do ICMS inválida no produto {index}.")
+                    if key == "icms_st_base_method" and value not in {"4", "6"}:
+                        raise ValueError(f"Modalidade da base de ICMS ST inválida no produto {index}.")
                 else:
                     try:
                         rate = Decimal(value)
                     except InvalidOperation as exc:
                         raise ValueError(f"Alíquota inválida no produto {index}: {key}.") from exc
-                    if not rate.is_finite() or not 0 <= rate <= 100:
+                    ceiling = 999999999 if key in {"icms_st_retained_base", "icms_st_retained_value"} else 999.9999 if key == "icms_st_mva_rate" else 100
+                    if not rate.is_finite() or not 0 <= rate <= Decimal(str(ceiling)):
                         raise ValueError(f"Alíquota fora do intervalo no produto {index}: {key}.")
             item["tax_configuration"][key] = value
         if any(item[key] for key in ("reference", "product_code", "description", "ncm")):
