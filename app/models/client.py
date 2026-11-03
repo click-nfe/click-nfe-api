@@ -5,7 +5,7 @@ from app.models.utils import TimestampMixin, uuid_pk
 
 from sqlalchemy.dialects.postgresql import UUID
 
-from sqlalchemy import Column, DateTime, ForeignKey, String, Boolean, Text, UniqueConstraint
+from sqlalchemy import Column, DateTime, ForeignKey, String, Boolean, Text, JSON, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from ..extensions import Base
@@ -36,6 +36,8 @@ class Client(TimestampMixin, Base):
     regime_tributacao = Column(String(32), nullable=True)
 
     ativo = Column(Boolean, nullable=False, default=True)
+    simplified_issuance_config = Column(JSON, nullable=True)
+    simplified_issuance_updated_at = Column(DateTime, nullable=True)
 
     organization = relationship("Organization", back_populates="clients")
 

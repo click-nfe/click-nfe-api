@@ -182,6 +182,31 @@ def get_nfe_workflow_state(process_id: str):
         return bad_request_response(exc)
 
 
+@import_process_bp.get("/<process_id>/simplified-reconciliation")
+@auth_required
+def get_simplified_reconciliation(process_id: str):
+    service = _service()
+    process = service.import_process_query_for_current_user().filter_by(id=uuid_or_404(process_id)).first_or_404()
+    try:
+        return jsonify(service.simplified_reconciliation(process))
+    except ValueError as exc:
+        return bad_request_response(exc)
+
+
+@import_process_bp.put("/<process_id>/simplified-reconciliation")
+@auth_required
+def update_simplified_reconciliation(process_id: str):
+    service = _service()
+    process = service.import_process_query_for_current_user().filter_by(id=uuid_or_404(process_id)).first_or_404()
+    try:
+        result = service.save_simplified_links(process, json_payload().get("links"))
+        db.session.commit()
+        return jsonify(result)
+    except ValueError as exc:
+        db.session.rollback()
+        return bad_request_response(exc)
+
+
 @import_process_bp.put("/<process_id>")
 @auth_required
 def update_import_process(process_id: str):

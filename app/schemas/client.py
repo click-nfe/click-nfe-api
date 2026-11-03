@@ -30,6 +30,7 @@ class ClientSchema(SQLAlchemyAutoSchema):
         model = Client
         load_instance = True
         include_fk = True
+        exclude = ("simplified_issuance_config", "simplified_issuance_updated_at")
 
 
 class ClientCreateSchema(Schema):

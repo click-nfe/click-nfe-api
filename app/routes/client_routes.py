@@ -1,3 +1,4 @@
+from datetime import datetime
 from flask import Blueprint, current_app, g, jsonify, request
 from marshmallow import ValidationError
 from sqlalchemy import or_
@@ -11,6 +12,9 @@ from ..integrations.brasil_api import (
     BrasilApiUnavailableError,
 )
 from ..models import Client
+from ..services.import_process import ImportNfeService
+from ..services.simplified_issuance import normalize_config
+from ..schemas.import_process import ImportProcessSchema
 from ..schemas import (
     ClientCreateSchema,
     ClientListQuerySchema,
@@ -175,3 +179,36 @@ def update_client(client_id: str):
 
     db.session.commit()
     return jsonify(client_schema.dump(client))
+
+
+@client_bp.get("/<client_id>/simplified-issuance")
+@auth_required
+def get_simplified_issuance(client_id: str):
+    client = _client_query_for_user().filter(Client.id == uuid_or_404(client_id)).first_or_404()
+    return jsonify({"config": client.simplified_issuance_config, "updated_at": client.simplified_issuance_updated_at.isoformat() if client.simplified_issuance_updated_at else None})
+
+
+@client_bp.put("/<client_id>/simplified-issuance")
+@auth_required
+def put_simplified_issuance(client_id: str):
+    client = _client_query_for_user().filter(Client.id == uuid_or_404(client_id)).first_or_404()
+    try:
+        config = normalize_config(json_payload())
+    except ValueError as exc:
+        return jsonify({"error": "invalid_simplified_issuance", "message": str(exc)}), 400
+    client.simplified_issuance_config = config
+    client.simplified_issuance_updated_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify({"config": config, "updated_at": client.simplified_issuance_updated_at.isoformat()})
+
+
+@client_bp.post("/<client_id>/simplified-issuance/start")
+@auth_required
+def start_simplified_issuance(client_id: str):
+    client = _client_query_for_user().filter(Client.id == uuid_or_404(client_id)).first_or_404()
+    if not client.ativo or not client.simplified_issuance_config:
+        return jsonify({"error": "simplified_issuance_not_configured", "message": "Configure a emissão simplificada deste cliente antes de iniciar."}), 400
+    service = ImportNfeService(current_user=g.current_user)
+    process = service.create_import_process({"importer_id": client.id, "source": "simplified"})
+    db.session.commit()
+    return jsonify(ImportProcessSchema().dump(process)), 201

@@ -1,0 +1,112 @@
+"""Small, explicit client template contract; process values never become defaults."""
+from __future__ import annotations
+
+from copy import deepcopy
+from decimal import Decimal, InvalidOperation
+
+from app.models.import_process import ImportPurpose
+
+DOCUMENT = {"operation_nature", "presence_indicator", "intermediary_indicator"}
+TRANSPORT = {"freight_mode", "carrier_name", "carrier_tax_id", "carrier_state_registration", "carrier_address", "carrier_city", "carrier_state"}
+ITEM = {"reference", "product_code", "description", "ncm", "cfop", "unit", "import_purpose", "tax_configuration"}
+TAX = {"ii_rate", "ipi_rate", "pis_rate", "cofins_rate", "icms_cst", "icms_rate", "icms_base_reduction_rate"}
+
+
+def normalize_config(data: object) -> dict:
+    if not isinstance(data, dict) or set(data) - {"document", "transport", "items", "additional_info"}:
+        raise ValueError("Configuração da emissão simplificada inválida.")
+    result = {"document": {}, "transport": {}, "items": [], "additional_info": {}}
+    for section, allowed in (("document", DOCUMENT), ("transport", TRANSPORT), ("additional_info", {"fiscal", "complementary", "legal_text"})):
+        values = data.get(section) or {}
+        if not isinstance(values, dict) or set(values) - allowed:
+            raise ValueError(f"Campos inválidos em {section}.")
+        for key, value in values.items():
+            if not isinstance(value, str) or len(value) > 1000:
+                raise ValueError(f"Valor inválido em {section}.{key}.")
+            result[section][key] = value.strip()
+    document = result["document"]
+    transport = result["transport"]
+    if len(document.get("operation_nature", "")) > 60:
+        raise ValueError("A natureza da operação aceita até 60 caracteres.")
+    if document.get("presence_indicator", "") not in ("", "0", "1", "2", "3", "4", "5", "9"):
+        raise ValueError("Indicador de presença inválido.")
+    if document.get("intermediary_indicator", "") not in ("", "0", "1"):
+        raise ValueError("Indicador de intermediador inválido.")
+    if transport.get("freight_mode", "") not in ("", "0", "1", "2", "3", "4", "9"):
+        raise ValueError("Modalidade do frete inválida; use 0, 1, 2, 3, 4 ou 9.")
+    if len(transport.get("carrier_name", "")) > 60 or len(transport.get("carrier_state", "")) not in (0, 2):
+        raise ValueError("Nome ou UF da transportadora inválido.")
+    items = data.get("items") or []
+    if not isinstance(items, list) or len(items) > 500:
+        raise ValueError("A configuração aceita até 500 referências de produtos.")
+    for index, raw in enumerate(items, 1):
+        if not isinstance(raw, dict) or set(raw) - ITEM:
+            raise ValueError(f"Campos inválidos no produto {index}.")
+        item = {}
+        for key in ITEM - {"tax_configuration"}:
+            value = raw.get(key, "")
+            if not isinstance(value, str) or len(value) > (500 if key == "description" else 80):
+                raise ValueError(f"Valor inválido no produto {index}: {key}.")
+            item[key] = value.strip()
+        if item["ncm"] and (len(item["ncm"]) != 8 or not item["ncm"].isdigit()):
+            raise ValueError(f"NCM inválido no produto {index}.")
+        if item["cfop"] and (len(item["cfop"]) != 4 or not item["cfop"].isdigit()):
+            raise ValueError(f"CFOP inválido no produto {index}.")
+        if item["product_code"] and len(item["product_code"]) > 60:
+            raise ValueError(f"Código NF-e muito longo no produto {index}.")
+        if len(item["unit"]) > 6:
+            raise ValueError(f"Unidade do produto {index} deve ter até 6 caracteres.")
+        if item["import_purpose"] and item["import_purpose"] not in ImportPurpose.values():
+            raise ValueError(f"Finalidade inválida no produto {index}.")
+        taxes = raw.get("tax_configuration") or {}
+        if not isinstance(taxes, dict) or set(taxes) - TAX:
+            raise ValueError(f"Tributação inválida no produto {index}.")
+        item["tax_configuration"] = {}
+        for key, value in taxes.items():
+            if not isinstance(value, str):
+                raise ValueError(f"Alíquota inválida no produto {index}: {key}.")
+            value = value.strip()
+            if value:
+                if key == "icms_cst":
+                    if not value.isdigit() or len(value) > 2:
+                        raise ValueError(f"CST inválido no produto {index}.")
+                else:
+                    try:
+                        rate = Decimal(value)
+                    except InvalidOperation as exc:
+                        raise ValueError(f"Alíquota inválida no produto {index}: {key}.") from exc
+                    if not rate.is_finite() or not 0 <= rate <= 100:
+                        raise ValueError(f"Alíquota fora do intervalo no produto {index}: {key}.")
+            item["tax_configuration"][key] = value
+        if any(item[key] for key in ("reference", "product_code", "description", "ncm")):
+            result["items"].append(item)
+    return result
+
+
+def reconcile(config: dict, normalized: dict, links: dict | None = None) -> list[dict]:
+    """Only exact unique reference + NCM matches can be applied automatically."""
+    templates = config.get("items") or []
+    links = links or {}
+    results = []
+    for source in normalized.get("items") or []:
+        number = str(source.get("number") or "")
+        ncm = str(source.get("ncm") or "")
+        catalog_code = source.get("catalog_product_code") or source.get("product_code")
+        code = str(catalog_code or "").strip().casefold()
+        candidates = [i for i, item in enumerate(templates) if item.get("ncm") == ncm and code and code in {str(item.get("reference") or "").strip().casefold(), str(item.get("product_code") or "").strip().casefold()}]
+        selected = links.get(number)
+        if selected is not None and (not isinstance(selected, int) or selected < 0 or selected >= len(templates) or templates[selected].get("ncm") != ncm):
+            selected = None
+        if selected is None and len(candidates) == 1:
+            selected = candidates[0]
+        results.append({"duimp_item_number": number, "catalog_product_code": catalog_code, "ncm": ncm, "description": source.get("description"), "template_index": selected, "status": "linked" if number in links and selected is not None else "matched" if selected is not None else "ambiguous" if len(candidates) > 1 else "unmatched", "candidates": candidates})
+    return results
+
+
+def draft_defaults(config: dict) -> dict:
+    transport = deepcopy(config.get("transport") or {})
+    carrier = {"tax_id": transport.pop("carrier_tax_id", ""), "name": transport.pop("carrier_name", ""), "state_registration": transport.pop("carrier_state_registration", ""), "address": transport.pop("carrier_address", ""), "city_name": transport.pop("carrier_city", ""), "state": transport.pop("carrier_state", "")}
+    transport["carrier"] = {key: value for key, value in carrier.items() if value}
+    if not transport["carrier"]:
+        transport.pop("carrier")
+    return {"document": {k: v for k, v in config.get("document", {}).items() if v}, "transport": {k: v for k, v in transport.items() if v}, "additional_info": {k: v for k, v in config.get("additional_info", {}).items() if v}}
