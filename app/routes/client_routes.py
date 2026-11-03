@@ -4,7 +4,7 @@ from marshmallow import ValidationError
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 
-from ..auth import auth_required
+from ..auth import ADMIN_ROLE, auth_required
 from ..extensions import db
 from ..integrations.brasil_api import (
     BrasilApiCnpjClient,
@@ -196,6 +196,11 @@ def put_simplified_issuance(client_id: str):
         config = normalize_config(json_payload())
     except ValueError as exc:
         return jsonify({"error": "invalid_simplified_issuance", "message": str(exc)}), 400
+    if g.current_user.role != ADMIN_ROLE and any(
+        item["tax_configuration"].get("icms_tax_treatment_confirmed") is True
+        for item in config["items"]
+    ):
+        return jsonify({"error": "forbidden", "message": "A confirmação do tratamento fiscal exige um administrador."}), 403
     client.simplified_issuance_config = config
     client.simplified_issuance_updated_at = datetime.utcnow()
     db.session.commit()
