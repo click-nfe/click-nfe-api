@@ -129,9 +129,17 @@ def reconcile(config: dict, normalized: dict, links: dict | None = None) -> list
     for source in normalized.get("items") or []:
         number = str(source.get("number") or "")
         ncm = str(source.get("ncm") or "")
-        catalog_code = source.get("catalog_product_code") or source.get("product_code")
+        # Em snapshots anteriores, catalog_product_code guardava o código
+        # interno (p.ex. "Gray Pipe Gray"). O identificador da coluna
+        # "Código do Produto" sempre ficou em catalog_product_id.
+        catalog_code = source.get("catalog_product_id") or source.get("catalog_product_code") or source.get("product_code")
         code = str(catalog_code or "").strip().casefold()
         candidates = [i for i, item in enumerate(templates) if item.get("ncm") == ncm and code and code in {str(item.get("reference") or "").strip().casefold(), str(item.get("product_code") or "").strip().casefold()}]
+        if not candidates:
+            internal_code = source.get("catalog_internal_code") or source.get("catalog_product_code")
+            internal_code = str(internal_code or "").strip().casefold()
+            if internal_code and internal_code != code:
+                candidates = [i for i, item in enumerate(templates) if item.get("ncm") == ncm and internal_code in {str(item.get("reference") or "").strip().casefold(), str(item.get("product_code") or "").strip().casefold()}]
         selected = links.get(number)
         if selected is not None and (not isinstance(selected, int) or selected < 0 or selected >= len(templates) or templates[selected].get("ncm") != ncm):
             selected = None
