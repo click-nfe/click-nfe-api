@@ -54,6 +54,7 @@ class ImportProcessSource(EnumMixin):
     PORTAL_UNICO = "portal_unico"
     GETT_IMPORT = "gett_import"
     API = "api"
+    SIMPLIFIED = "simplified"
 
 
 class ExternalProvider(EnumMixin):
@@ -171,6 +172,8 @@ class ImportProcess(Base):
     reference_code = Column(String(80), nullable=False, index=True)
     duimp_number = Column(String(50), nullable=True, index=True)
     duimp_version = Column(String(20), nullable=True)
+    simplified_config_snapshot = Column(JSON, nullable=True)
+    simplified_item_links = Column(JSON, nullable=True)
 
     status = enum_column(
         ImportProcessStatus,
