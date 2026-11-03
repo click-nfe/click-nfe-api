@@ -1,3 +1,5 @@
+import pytest
+
 from app.extensions import db
 from uuid import UUID
 from app.models import Client, ImportProcess, NfeItemClassification
@@ -119,6 +121,18 @@ def test_extended_workbook_fields_are_validated_and_applied_to_draft_defaults():
     assert defaults["transport"]["volume"] == {"quantity": 80, "species": "CAIXA", "gross_weight": "1500"}
     assert defaults["payment"] == {"method": "90", "value": "0"}
     assert normalized["items"][0]["tax_configuration"]["icms_origin"] == "1"
+
+
+def test_icms_workbook_fields_validate_without_automatically_confirming_tax_treatment():
+    template = config()
+    taxes = template["items"][0]["tax_configuration"]
+    taxes.update({"icms_st_base_method": "4", "icms_st_mva_rate": "40.5",
+                  "icms_st_retained_base": "1050.00", "icms_tax_treatment_confirmed": False})
+    normalized = normalize_config(template)
+    assert normalized["items"][0]["tax_configuration"]["icms_tax_treatment_confirmed"] is False
+    taxes["icms_st_base_method"] = "8"
+    with pytest.raises(ValueError, match="Modalidade"):
+        normalize_config(template)
 
 
 def test_quick_prepare_reports_unmatched_items_without_creating_a_draft(api):
