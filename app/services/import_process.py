@@ -2895,9 +2895,8 @@ class ImportNfeService:
                 exporter_code=group["exporter_code"],
                 foreign_supplier=group["foreign_supplier"],
                 operation_nature=(
-                    "Importação de mercadorias"
-                    if mixed
-                    else self._default_operation_nature(purposes[0])
+                    (process.simplified_config_snapshot or {}).get("document", {}).get("operation_nature")
+                    or ("Importação de mercadorias" if mixed else self._default_operation_nature(purposes[0]))
                 ),
                 item_purposes=purposes,
                 mixed_import_purposes=mixed,
@@ -3375,6 +3374,7 @@ class ImportNfeService:
                     "draft_id": str(draft.id),
                     "success": False,
                     "message": str(exc),
+                    "validation_errors": self.validate_draft(draft).errors,
                 })
 
         all_valid = bool(results) and all(
@@ -3413,7 +3413,7 @@ class ImportNfeService:
         if simplified_config:
             for section, defaults in draft_defaults(simplified_config).items():
                 payload[section] = self._merge_defaults(defaults, payload.get(section))
-        payload["series"] = payload.get("series") or self.DEFAULT_NFE_SERIES
+        payload["series"] = payload.get("series") or simplified_config.get("series") or self.DEFAULT_NFE_SERIES
         fiscal_profile = self.get_importer_fiscal_profile(process.importer_id)
         snapshot_id = payload.get("duimp_snapshot_id")
         if snapshot_id:
@@ -3472,8 +3472,9 @@ class ImportNfeService:
                 (planned_document.item_purposes or [None])[0]
                 or payload.get("import_purpose")
             )
-            payload["foreign_supplier"] = deepcopy(
-                planned_document.foreign_supplier
+            payload["foreign_supplier"] = self._merge_defaults(
+                planned_document.foreign_supplier,
+                payload.get("foreign_supplier"),
             )
             payload["additional_costs"] = deepcopy(
                 planned_document.allocated_shared_costs or {}

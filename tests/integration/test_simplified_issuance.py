@@ -2,6 +2,7 @@ from app.extensions import db
 from uuid import UUID
 from app.models import Client, ImportProcess, NfeItemClassification
 from tests.integration.test_import_nfe_api_flow import api  # noqa: F401 - shared isolated SQLite fixture
+from app.services.simplified_issuance import normalize_config, draft_defaults
 
 
 def config(*, code="A-001", description="Produto padrão"):
@@ -106,3 +107,33 @@ def test_simplified_draft_uses_client_code_and_tax_without_number(api):
         assert stored.fiscal_payload["items"][0]["product_code"] == "INTERNO-1"
         assert stored.fiscal_payload["items"][0]["description"] == "Produto padrão"
         assert stored.fiscal_payload["source"]["simplified_issuance"] is True
+
+
+def test_extended_workbook_fields_are_validated_and_applied_to_draft_defaults():
+    template = config()
+    template.update({"series": "1", "volume": {"quantity": "80", "species": "CAIXA", "gross_weight": "1500"},
+                     "payment": {"method": "90", "value": "0"}})
+    template["items"][0]["tax_configuration"].update({"icms_origin": "1", "ipi_cst": "49"})
+    normalized = normalize_config(template)
+    defaults = draft_defaults(normalized)
+    assert defaults["transport"]["volume"] == {"quantity": 80, "species": "CAIXA", "gross_weight": "1500"}
+    assert defaults["payment"] == {"method": "90", "value": "0"}
+    assert normalized["items"][0]["tax_configuration"]["icms_origin"] == "1"
+
+
+def test_quick_prepare_reports_unmatched_items_without_creating_a_draft(api):
+    client, headers, client_id = api
+    url = f"/clients/{client_id}/simplified-issuance"
+    assert client.put(url, headers=headers, json=config()).status_code == 200
+    start = client.post(f"{url}/start", headers=headers, json={"duimp_number": "26BR0000000000-1"})
+    assert start.status_code == 201
+    process_id = start.get_json()["id"]
+    prepared = client.post(f"/import-processes/{process_id}/simplified-prepare", headers=headers, json={"sign": False, "duimp_payload": {
+        "numero": "26BR0000000000-1", "versao": "1", "itens": [
+            {"numeroItem": "1", "codigoProduto": "A-001", "ncm": "39172290", "descricao": "Produto", "quantidade": "1", "valorProduto": "100"},
+            {"numeroItem": "2", "codigoProduto": "OUTRO", "ncm": "39172290", "descricao": "Outro", "quantidade": "1", "valorProduto": "100"},
+        ],
+    }})
+    assert prepared.status_code == 200, prepared.get_json()
+    assert prepared.get_json()["status"] == "needs_review"
+    assert prepared.get_json()["unmatched_items"]

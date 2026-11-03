@@ -9,13 +9,19 @@ from app.models.import_process import ImportPurpose
 DOCUMENT = {"operation_nature", "presence_indicator", "intermediary_indicator"}
 TRANSPORT = {"freight_mode", "carrier_name", "carrier_tax_id", "carrier_state_registration", "carrier_address", "carrier_city", "carrier_state"}
 ITEM = {"reference", "product_code", "description", "ncm", "cfop", "unit", "import_purpose", "tax_configuration"}
-TAX = {"ii_rate", "ipi_rate", "pis_rate", "cofins_rate", "icms_cst", "icms_rate", "icms_base_reduction_rate"}
+TAX = {"ii_rate", "ipi_rate", "pis_rate", "cofins_rate", "icms_cst", "icms_origin", "ipi_cst", "pis_cst", "cofins_cst", "icms_rate", "icms_base_reduction_rate"}
+PAYMENT = {"payment_indicator", "method", "description", "value"}
+VOLUME = {"quantity", "species", "brand", "numbering", "net_weight", "gross_weight"}
 
 
 def normalize_config(data: object) -> dict:
-    if not isinstance(data, dict) or set(data) - {"document", "transport", "items", "additional_info"}:
+    if not isinstance(data, dict) or set(data) - {"document", "transport", "items", "additional_info", "series", "payment", "volume"}:
         raise ValueError("Configuração da emissão simplificada inválida.")
-    result = {"document": {}, "transport": {}, "items": [], "additional_info": {}}
+    result = {"document": {}, "transport": {}, "items": [], "additional_info": {}, "payment": {}, "volume": {}}
+    series = data.get("series") or ""
+    if not isinstance(series, str) or (series and (not series.isdigit() or not 1 <= int(series) <= 999)):
+        raise ValueError("Série da NF-e inválida.")
+    result["series"] = series
     for section, allowed in (("document", DOCUMENT), ("transport", TRANSPORT), ("additional_info", {"fiscal", "complementary", "legal_text"})):
         values = data.get(section) or {}
         if not isinstance(values, dict) or set(values) - allowed:
@@ -36,6 +42,27 @@ def normalize_config(data: object) -> dict:
         raise ValueError("Modalidade do frete inválida; use 0, 1, 2, 3, 4 ou 9.")
     if len(transport.get("carrier_name", "")) > 60 or len(transport.get("carrier_state", "")) not in (0, 2):
         raise ValueError("Nome ou UF da transportadora inválido.")
+    for section, allowed in (("payment", PAYMENT), ("volume", VOLUME)):
+        values = data.get(section) or {}
+        if not isinstance(values, dict) or set(values) - allowed:
+            raise ValueError(f"Campos inválidos em {section}.")
+        for key, value in values.items():
+            if not isinstance(value, str) or len(value) > 100:
+                raise ValueError(f"Valor inválido em {section}.{key}.")
+            value = value.strip()
+            if value and key in {"quantity", "net_weight", "gross_weight", "value"}:
+                try:
+                    number = Decimal(value)
+                except InvalidOperation as exc:
+                    raise ValueError(f"Valor numérico inválido em {section}.{key}.") from exc
+                if not number.is_finite() or number < 0 or (key == "quantity" and (number < 1 or number != int(number))):
+                    raise ValueError(f"Valor numérico inválido em {section}.{key}.")
+            result[section][key] = value
+    if result["payment"].get("payment_indicator", "") not in ("", "0", "1"):
+        raise ValueError("Indicador de pagamento inválido.")
+    method = result["payment"].get("method", "")
+    if method and (len(method) != 2 or not method.isdigit()):
+        raise ValueError("Meio de pagamento inválido.")
     items = data.get("items") or []
     if not isinstance(items, list) or len(items) > 500:
         raise ValueError("A configuração aceita até 500 referências de produtos.")
@@ -67,8 +94,8 @@ def normalize_config(data: object) -> dict:
                 raise ValueError(f"Alíquota inválida no produto {index}: {key}.")
             value = value.strip()
             if value:
-                if key == "icms_cst":
-                    if not value.isdigit() or len(value) > 2:
+                if key in {"icms_cst", "ipi_cst", "pis_cst", "cofins_cst", "icms_origin"}:
+                    if not value.isdigit() or len(value) > (1 if key == "icms_origin" else 2):
                         raise ValueError(f"CST inválido no produto {index}.")
                 else:
                     try:
@@ -109,4 +136,7 @@ def draft_defaults(config: dict) -> dict:
     transport["carrier"] = {key: value for key, value in carrier.items() if value}
     if not transport["carrier"]:
         transport.pop("carrier")
-    return {"document": {k: v for k, v in config.get("document", {}).items() if v}, "transport": {k: v for k, v in transport.items() if v}, "additional_info": {k: v for k, v in config.get("additional_info", {}).items() if v}}
+    volume = config.get("volume") or {}
+    if volume:
+        transport["volume"] = {k: int(v) if k == "quantity" else v for k, v in volume.items() if v}
+    return {"document": {k: v for k, v in config.get("document", {}).items() if v}, "transport": {k: v for k, v in transport.items() if v}, "payment": {k: v for k, v in config.get("payment", {}).items() if v}, "additional_info": {k: v for k, v in config.get("additional_info", {}).items() if v}}

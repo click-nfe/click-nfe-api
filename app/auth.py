@@ -15,7 +15,7 @@ ACCESS_TAGS = ("clientes", "processos", "emissao", "configuracoes")
 
 def required_access_tag(path: str, method: str) -> str | None:
     if path.startswith("/import-processes"):
-        if any(part in path for part in ("/nfe-", "/item-classifications")):
+        if any(part in path for part in ("/nfe-", "/item-classifications", "/simplified-prepare")):
             return "emissao"
         return "processos|emissao" if method in {"GET", "HEAD"} else "processos"
     if path.startswith("/nfe-drafts"):

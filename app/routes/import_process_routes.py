@@ -4,9 +4,10 @@ from zipfile import ZIP_DEFLATED, ZipFile
 from flask import Blueprint, Response, current_app, g, jsonify, request
 from marshmallow import ValidationError
 
-from ..auth import auth_required
+from ..auth import ADMIN_ROLE, auth_required
 from ..extensions import db
 from ..integrations.portal_unico import (
+    PortalUnicoIntegrationError,
     PortalUnicoServiceUnavailableError,
     portal_credential_resolver_from_config,
 )
@@ -582,6 +583,102 @@ def fetch_process_duimp(process_id: str):
         return jsonify(
             {"error": "external_integration_error", "message": str(exc)}
         ), 502
+
+
+@import_process_bp.post("/<process_id>/simplified-prepare")
+@auth_required
+def prepare_simplified_xmls(process_id: str):
+    """Prepare the saved client template; never transmit to SEFAZ."""
+    service = _service()
+    process = service.import_process_query_for_current_user().filter_by(id=uuid_or_404(process_id)).first_or_404()
+    if not process.simplified_config_snapshot:
+        return bad_request_response(ValueError("Este processo não é uma emissão simplificada."))
+    request_data = json_payload()
+    if set(request_data) - {"number", "sign", "duimp_payload", "duimp_overrides", "foreign_supplier", "additional_costs"}:
+        return bad_request_response(ValueError("Parâmetros não reconhecidos."))
+    overrides = request_data.get("duimp_overrides") or {}
+    supplier = request_data.get("foreign_supplier") or {}
+    costs = request_data.get("additional_costs") or {}
+    if (not isinstance(overrides, dict) or set(overrides) - {"clearance_location", "clearance_state", "clearance_date", "transport_mode_code"}
+            or not isinstance(supplier, dict) or set(supplier) - {"name", "country_code", "country_name"}
+            or not isinstance(costs, dict) or set(costs) - {"afrmm", "siscomex_fee", "thc", "other"}
+            or any(not isinstance(value, str) or len(value) > 100 for value in [*overrides.values(), *supplier.values(), *costs.values()])):
+        return bad_request_response(ValueError("Complementos desta operação inválidos."))
+    overrides = {key: value.strip() for key, value in overrides.items() if value.strip()}
+    supplier = {key: value.strip() for key, value in supplier.items() if value.strip()}
+    costs = {key: value.strip() for key, value in costs.items() if value.strip()}
+    if not isinstance(request_data.get("sign", False), bool):
+        return bad_request_response(ValueError("A opção de assinatura deve ser verdadeira ou falsa."))
+    if request_data.get("sign") and g.current_user.role != ADMIN_ROLE:
+        return jsonify({"error": "forbidden", "message": "Somente um administrador pode assinar o XML."}), 403
+    number = request_data.get("number")
+    if number is not None and (type(number) is not int or number < 1 or number > 999999999):
+        return bad_request_response(ValueError("Número da NF-e inválido."))
+    if not process.duimp_number and not request_data.get("duimp_payload"):
+        return bad_request_response(ValueError("Informe a DUIMP ao iniciar o processo."))
+    try:
+        snapshot = service._snapshot_for_process(process)
+    except ValueError:
+        try:
+            snapshot = service.fetch_duimp_for_process(process, {
+                "duimp_payload": request_data.get("duimp_payload"), "enrich_catalog": True,
+            })["snapshot"]
+            db.session.commit()
+        except PortalUnicoServiceUnavailableError:
+            db.session.rollback()
+            return jsonify({"error": "portal_unico_service_unavailable", "message": "Serviço Indisponível. Consulte a disponibilidade do Portal Único."}), 503
+        except ValueError as exc:
+            db.session.rollback()
+            return bad_request_response(exc)
+        except PortalUnicoIntegrationError:
+            db.session.rollback()
+            return jsonify({"error": "portal_unico_unavailable", "message": "Não foi possível consultar a DUIMP no Portal Único. Tente novamente no processo."}), 502
+    matches = service.simplified_reconciliation(process)["items"]
+    classifications = service.get_item_classification_state(process, snapshot.id)
+    pending = [item for item in matches if item["template_index"] is None]
+    if pending or not classifications["ready_for_draft"]:
+        return jsonify({
+            "status": "needs_review", "process_id": str(process.id),
+            "unmatched_items": [item["duimp_item_number"] for item in pending],
+            "unclassified_items": [item["duimp_item_number"] for item in classifications["items"] if item["status"] != "classified"],
+            "message": "Revise as associações e a tributação dos itens no processo.",
+        })
+    config = process.simplified_config_snapshot
+    try:
+        state = service.get_document_plan_state(process, snapshot.id)
+        plan = state.get("plan") or service.create_document_plan(process, CreateNfeDocumentPlanSchema().load({"duimp_snapshot_id": snapshot.id, "additional_costs": costs}))
+        if number is not None and len(plan["documents"]) != 1:
+            raise ValueError("O número manual exige uma única nota no plano. Revise os exportadores.")
+        if supplier and len(plan["documents"]) != 1:
+            raise ValueError("Há mais de um exportador. Revise o fornecedor estrangeiro em cada nota do plano.")
+        options = {"duimp_snapshot_id": snapshot.id, "series": config.get("series") or "1", "duimp_overrides": overrides, "foreign_supplier": supplier}
+        if number is not None:
+            options["number"] = number
+        service.generate_child_drafts(process, GenerateNfeChildDraftsSchema().load(options))
+        result = service.generate_and_validate_child_xmls(process, snapshot.id)
+        db.session.commit()
+        signed = []
+        signature_error = None
+        if request_data.get("sign") and result["all_valid"]:
+            for entry in result["results"]:
+                try:
+                    draft = service.nfe_draft_query_for_current_user().filter_by(id=uuid_or_404(entry["draft_id"])).first()
+                    xml = NfeXmlVersion.query.filter_by(id=uuid_or_404(entry["xml_version_id"]), nfe_draft_id=draft.id).first()
+                    service.sign_xml_version(draft, xml)
+                    db.session.commit()
+                    signed.append(entry["draft_id"])
+                except ValueError as exc:
+                    db.session.rollback()
+                    signature_error = str(exc)
+                    break
+        return jsonify({
+            "status": "needs_review" if signature_error else "signed" if signed and result["all_valid"] else "validated" if result["all_valid"] else "needs_review",
+            "message": signature_error,
+            "process_id": str(process.id), "all_valid": result["all_valid"], "results": result["results"], "signed_draft_ids": signed,
+        })
+    except (ValueError, NfeXsdConfigurationError) as exc:
+        db.session.rollback()
+        return jsonify({"status": "needs_review", "process_id": str(process.id), "message": str(exc)}), 200
 
 
 @import_process_bp.post("/<process_id>/nfe-draft/from-duimp")

@@ -209,6 +209,9 @@ def start_simplified_issuance(client_id: str):
     if not client.ativo or not client.simplified_issuance_config:
         return jsonify({"error": "simplified_issuance_not_configured", "message": "Configure a emissão simplificada deste cliente antes de iniciar."}), 400
     service = ImportNfeService(current_user=g.current_user)
-    process = service.create_import_process({"importer_id": client.id, "source": "simplified"})
+    duimp_number = (json_payload().get("duimp_number") or "").strip()
+    if duimp_number and (len(duimp_number) > 30 or not all(char.isalnum() or char == "-" for char in duimp_number)):
+        return jsonify({"error": "invalid_duimp_number", "message": "Número da DUIMP inválido."}), 400
+    process = service.create_import_process({"importer_id": client.id, "source": "simplified", "duimp_number": duimp_number or None})
     db.session.commit()
     return jsonify(ImportProcessSchema().dump(process)), 201
