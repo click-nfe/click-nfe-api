@@ -154,17 +154,21 @@ class DuimpNormalizer:
         else:
             catalog_code = catalog_codes if isinstance(catalog_codes, str) else None
 
+        portal_product_code = self._string(product.get("codigo"))
+        internal_product_code = self._string(
+            product.get("codigoInternoNfe")
+            or product.get("codigoInterno")
+            or catalog_code
+        )
+
         return {
             "number": str(identification.get("numeroItem") or ""),
-            # O código interno do Catálogo não identifica necessariamente o
-            # cProd adotado pelo emitente na NF-e. Mantê-lo só como referência.
-            "product_code": "",
-            "catalog_product_code": self._string(
-                product.get("codigoInternoNfe")
-                or product.get("codigoInterno")
-                or catalog_code
-            ),
-            "catalog_product_id": self._string(product.get("codigo")),
+            # "Código do Produto" da relação de itens da DUIMP. O código
+            # interno enriquecido pelo Catálogo é mantido em campo separado.
+            "product_code": portal_product_code,
+            "catalog_product_code": portal_product_code,
+            "catalog_internal_code": internal_product_code,
+            "catalog_product_id": portal_product_code,
             "product_version": self._string(product.get("versao")),
             "description": description,
             "additional_info": additional_info,
