@@ -39,6 +39,7 @@ class BaseAutoSchema(SQLAlchemyAutoSchema):
 class ImportProcessSchema(BaseAutoSchema):
     class Meta(BaseAutoSchema.Meta):
         model = ImportProcess
+        exclude = ("simplified_config_snapshot", "simplified_item_links")
 
     id = auto_field(dump_only=True)
     created_at = auto_field(dump_only=True)
