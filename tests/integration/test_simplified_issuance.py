@@ -4,7 +4,7 @@ from app.extensions import db
 from uuid import UUID
 from app.models import Client, ImportProcess, NfeItemClassification
 from tests.integration.test_import_nfe_api_flow import api  # noqa: F401 - shared isolated SQLite fixture
-from app.services.simplified_issuance import normalize_config, draft_defaults
+from app.services.simplified_issuance import normalize_config, draft_defaults, reconcile
 
 
 def config(*, code="A-001", description="Produto padrão"):
@@ -70,6 +70,17 @@ def test_duimp_only_matches_exact_code_and_ncm_and_preserves_template_tax(api):
     assert linked.get_json()["items"][1]["status"] == "linked"
     invalid = client.put(f"/import-processes/{process_id}/simplified-reconciliation", headers=headers, json={"links": {"00002": 999}})
     assert invalid.status_code == 400
+
+
+def test_reconciliation_prefers_duimp_product_column_in_old_snapshot():
+    template = config(code="204")
+    old_snapshot = {"items": [
+        {"number": "00001", "catalog_product_id": "204", "catalog_product_code": "Gray Pipe Gray", "ncm": "39172290"},
+        {"number": "00002", "catalog_product_id": "204", "catalog_product_code": "Gray Pipe Gray", "ncm": "39172290"},
+    ]}
+    matches = reconcile(template, old_snapshot)
+    assert [entry["catalog_product_code"] for entry in matches] == ["204", "204"]
+    assert [entry["status"] for entry in matches] == ["matched", "matched"]
 
 
 def test_simplified_draft_uses_client_code_and_tax_without_number(api):
