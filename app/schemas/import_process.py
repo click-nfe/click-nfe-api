@@ -106,6 +106,7 @@ class ImportProcessListQuerySchema(Schema):
     duimp_number = fields.String(load_default=None)
     q = fields.String(load_default=None)
     created_by_me = fields.Boolean(load_default=False)
+    compact = fields.Boolean(load_default=False)
     limit = fields.Integer(load_default=25, validate=validate.Range(min=1, max=100))
     offset = fields.Integer(load_default=0, validate=validate.Range(min=0))
 

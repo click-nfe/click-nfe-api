@@ -1788,6 +1788,45 @@ def test_process_dashboard_groups_by_client_and_exposes_next_action(
     assert process["last_responsible"]["is_current_user"] is True
 
 
+def test_compact_process_list_preserves_filters_without_loading_workflow(api, monkeypatch):
+    client, headers, importer_id = api
+    created = client.post(
+        "/import-processes",
+        headers=headers,
+        json={"importer_id": importer_id, "source": "portal_unico"},
+    )
+    assert created.status_code == 201
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            ImportNfeService,
+            "build_import_process_list_summary",
+            lambda *_args, **_kwargs: pytest.fail("A lista compacta não deve calcular o workflow."),
+        )
+        listed = client.get(
+            f"/import-processes?compact=true&importer_id={importer_id}&limit=10",
+            headers=headers,
+        )
+
+    assert listed.status_code == 200
+    body = listed.get_json()
+    assert body["total"] == 1
+    assert body["compact"] is True
+    assert body["items"] == [{
+        "id": created.get_json()["id"],
+        "reference_code": created.get_json()["reference_code"],
+        "duimp_number": None,
+        "status": "created",
+        "source": "portal_unico",
+        "updated_at": body["items"][0]["updated_at"],
+        "importer": {
+            "id": importer_id,
+            "name": "Importadora Teste Ltda",
+            "cnpj": "00000000000191",
+        },
+    }]
+
+
 def test_number_sequence_preserves_progress_and_rejects_regression(api):
     client, headers, importer_id = api
     created = client.put(
