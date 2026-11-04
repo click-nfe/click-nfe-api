@@ -192,6 +192,7 @@ class ImportTaxCalculator:
         costs = additional_costs or {}
         cost_totals = {
             "afrmm": self._money(costs.get("afrmm")),
+            "tum": self._money(costs.get("tum")),
             "siscomex_fee": self._money(costs.get("siscomex_fee")),
             "thc": self._money(costs.get("thc")),
             "other": self._money(costs.get("other")),
@@ -230,12 +231,12 @@ class ImportTaxCalculator:
                 "para ratear as despesas adicionais."
             )
 
-        if preallocated_costs is None and cost_totals["afrmm"] and len(items) > 1 and any(
+        if preallocated_costs is None and (cost_totals["afrmm"] or cost_totals["tum"]) and len(items) > 1 and any(
             weight <= 0 for weight in net_weight_weights
         ):
             raise ImportTaxCalculationError(
                 "O peso líquido positivo de todos os itens é obrigatório para "
-                "ratear o AFRMM."
+                "ratear o AFRMM e a TUM."
             )
 
         if preallocated_costs is not None:
@@ -248,7 +249,7 @@ class ImportTaxCalculator:
                     self._money(row.get(name))
                     for row in preallocated_costs
                 ]
-                for name in ("afrmm", "siscomex_fee", "thc", "other")
+                for name in ("afrmm", "tum", "siscomex_fee", "thc", "other")
             }
             for name, values in allocations.items():
                 if sum(values, Decimal("0")) != cost_totals[name]:
@@ -259,6 +260,10 @@ class ImportTaxCalculator:
             allocations = {
                 "afrmm": self.allocate(
                     cost_totals["afrmm"],
+                    net_weight_weights if len(items) > 1 else [Decimal("1")],
+                ),
+                "tum": self.allocate(
+                    cost_totals["tum"],
                     net_weight_weights if len(items) > 1 else [Decimal("1")],
                 ),
                 "siscomex_fee": self.allocate(
@@ -665,6 +670,7 @@ class ImportTaxCalculator:
             "ibs_value": Decimal("0"),
             "cbs_value": Decimal("0"),
             "afrmm_value": Decimal("0"),
+            "tum_value": Decimal("0"),
             "siscomex_fee": Decimal("0"),
             "thc_value": Decimal("0"),
             "additional_other_value": Decimal("0"),
@@ -680,6 +686,7 @@ class ImportTaxCalculator:
                 import_payload.get("afrmm_value")
             )
             cost_allocation = item.get("cost_allocation") or {}
+            fields["tum_value"] += self._money(cost_allocation.get("tum"))
             fields["siscomex_fee"] += self._money(
                 cost_allocation.get("siscomex_fee")
             )
@@ -837,6 +844,7 @@ class ImportTaxCalculator:
 
         for cost_name, total_field in {
             "afrmm": "afrmm_value",
+            "tum": "tum_value",
             "siscomex_fee": "siscomex_fee",
             "thc": "thc_value",
             "other": "additional_other_value",

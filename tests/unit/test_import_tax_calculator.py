@@ -240,6 +240,7 @@ def test_allocates_afrmm_by_net_weight_and_other_costs_by_customs_value():
         configuration=configuration(),
         additional_costs={
             "afrmm": "100.00",
+            "tum": "20.00",
             "siscomex_fee": "40.00",
             "thc": "20.00",
             "other": "4.00",
@@ -248,17 +249,22 @@ def test_allocates_afrmm_by_net_weight_and_other_costs_by_customs_value():
 
     assert items[0]["cost_allocation"] == {
         "afrmm": "90.00",
+        "tum": "18.00",
         "siscomex_fee": "10.00",
         "thc": "5.00",
         "other": "1.00",
     }
     assert items[1]["cost_allocation"] == {
         "afrmm": "10.00",
+        "tum": "2.00",
         "siscomex_fee": "30.00",
         "thc": "15.00",
         "other": "3.00",
     }
     assert totals["afrmm_value"] == "100.00"
+    assert totals["tum_value"] == "20.00"
+    assert items[0]["import_payload"]["afrmm_value"] == "90.00"
+    assert items[0]["other_value"] == "124.00"
     assert totals["siscomex_fee"] == "40.00"
     assert totals["thc_value"] == "20.00"
     assert totals["additional_other_value"] == "4.00"
