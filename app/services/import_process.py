@@ -522,6 +522,48 @@ class ImportNfeService:
     def list_import_processes(self, params: dict[str, Any]) -> dict[str, Any]:
         query = self._filtered_import_process_query(params)
         total = query.count()
+        if params.get("compact"):
+            rows = (
+                query.with_entities(
+                    ImportProcess.id.label("id"),
+                    ImportProcess.reference_code.label("reference_code"),
+                    ImportProcess.duimp_number.label("duimp_number"),
+                    ImportProcess.status.label("status"),
+                    ImportProcess.source.label("source"),
+                    ImportProcess.updated_at.label("updated_at"),
+                    Client.id.label("client_id"),
+                    Client.nome_resumido.label("short_name"),
+                    Client.razao_social.label("legal_name"),
+                    Client.cnpj.label("cnpj"),
+                )
+                .order_by(
+                    ImportProcess.updated_at.desc().nullslast(),
+                    ImportProcess.created_at.desc(),
+                )
+                .limit(params["limit"])
+                .offset(params["offset"])
+                .all()
+            )
+            return {
+                "items": [
+                    {
+                        "id": str(row.id),
+                        "reference_code": row.reference_code,
+                        "duimp_number": row.duimp_number,
+                        "status": self._enum_value(row.status),
+                        "source": self._enum_value(row.source),
+                        "updated_at": self._iso(row.updated_at),
+                        "importer": {
+                            "id": str(row.client_id),
+                            "name": row.short_name or row.legal_name,
+                            "cnpj": row.cnpj,
+                        },
+                    }
+                    for row in rows
+                ],
+                "total": total,
+                **params,
+            }
         rows = (
             query.order_by(
                 ImportProcess.updated_at.desc().nullslast(),
