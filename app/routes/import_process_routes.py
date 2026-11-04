@@ -601,7 +601,7 @@ def prepare_simplified_xmls(process_id: str):
     costs = request_data.get("additional_costs") or {}
     if (not isinstance(overrides, dict) or set(overrides) - {"clearance_location", "clearance_state", "clearance_date", "transport_mode_code"}
             or not isinstance(supplier, dict) or set(supplier) - {"name", "country_code", "country_name"}
-            or not isinstance(costs, dict) or set(costs) - {"afrmm", "siscomex_fee", "thc", "other"}
+            or not isinstance(costs, dict) or set(costs) - {"afrmm", "tum", "siscomex_fee", "thc", "other"}
             or any(not isinstance(value, str) or len(value) > 100 for value in [*overrides.values(), *supplier.values(), *costs.values()])):
         return bad_request_response(ValueError("Complementos desta operação inválidos."))
     overrides = {key: value.strip() for key, value in overrides.items() if value.strip()}

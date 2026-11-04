@@ -2774,7 +2774,7 @@ class ImportNfeService:
         )
         shared_costs = {
             name: self._money_text(self._decimal(shared_costs.get(name)))
-            for name in ("afrmm", "siscomex_fee", "thc", "other")
+            for name in ("afrmm", "tum", "siscomex_fee", "thc", "other")
         }
 
         weights = [
@@ -2787,10 +2787,15 @@ class ImportNfeService:
             raise ValueError(
                 "O valor aduaneiro positivo é obrigatório para ratear os custos."
             )
+        net_weights = [self._decimal(item.get("net_weight")) for item in source_items]
+        if (self._decimal(shared_costs["afrmm"]) or self._decimal(shared_costs["tum"])) and any(
+            weight <= 0 for weight in net_weights
+        ):
+            raise ValueError("O peso líquido positivo é obrigatório para ratear AFRMM e TUM.")
         allocations = {
             name: self._allocate_shared_cost_to_items(
                 self._decimal(value),
-                weights,
+                net_weights if name in {"afrmm", "tum"} else weights,
             )
             for name, value in shared_costs.items()
         }
@@ -3460,6 +3465,9 @@ class ImportNfeService:
             normalized["afrmm_value"] = (
                 planned_document.allocated_shared_costs or {}
             ).get("afrmm", "0.00")
+            normalized["tum_value"] = (
+                planned_document.allocated_shared_costs or {}
+            ).get("tum", "0.00")
             # Totais declarados na DUIMP pertencem ao processo inteiro. Cada
             # filha é conciliada pelos próprios itens e pelo rateio persistido.
             normalized["tax_totals"] = {}
@@ -4794,6 +4802,7 @@ class ImportNfeService:
             "clearance_date": duimp.get("clearance_date"),
             "transport_mode_code": duimp.get("transport_mode_code"),
             "afrmm_value": duimp.get("afrmm_value", "0"),
+            "tum_value": duimp.get("tum_value", "0"),
             "intermediation_type": duimp.get("intermediation_type") or "1",
             "exporter_code": duimp.get("exporter_code"),
             "import_modality": duimp.get("import_modality"),
@@ -4880,6 +4889,7 @@ class ImportNfeService:
         resolved = dict(additional_costs or {})
         defaults = {
             "afrmm": duimp.get("afrmm_value") or "0",
+            "tum": duimp.get("tum_value") or "0",
             "siscomex_fee": self._duimp_siscomex_fee(duimp),
             "thc": "0",
             "other": "0",
@@ -4952,6 +4962,7 @@ class ImportNfeService:
                 ("FRETE INTERNACIONAL", totals.get("freight_value")),
                 ("THC", additional_costs.get("thc")),
                 ("AFRMM", additional_costs.get("afrmm")),
+                ("TUM", additional_costs.get("tum")),
                 ("SEGURO INTERNACIONAL", totals.get("insurance_value")),
                 ("COFINS", totals.get("cofins_value")),
                 ("PIS", totals.get("pis_value")),
@@ -5853,7 +5864,7 @@ class ImportNfeService:
             name: self._decimal(additional_costs.get(name)).quantize(
                 Decimal("0.01"), rounding=ROUND_HALF_UP
             )
-            for name in ("afrmm", "siscomex_fee", "thc", "other")
+            for name in ("afrmm", "tum", "siscomex_fee", "thc", "other")
         }
         customs_weights = [
             self._decimal(item.get("customs_value") or item.get("product_value"))
@@ -5867,6 +5878,7 @@ class ImportNfeService:
         )
         allocations = {
             "afrmm": self.tax_calculator.allocate(costs["afrmm"], afrmm_weights),
+            "tum": self.tax_calculator.allocate(costs["tum"], afrmm_weights),
             "siscomex_fee": self.tax_calculator.allocate(costs["siscomex_fee"], customs_weights),
             "thc": self.tax_calculator.allocate(costs["thc"], customs_weights),
             "other": self.tax_calculator.allocate(costs["other"], customs_weights),

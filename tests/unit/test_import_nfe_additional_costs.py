@@ -22,6 +22,7 @@ def test_resolves_available_costs_from_normalized_source():
 
     assert result == {
         "afrmm": "100.00",
+        "tum": "0",
         "siscomex_fee": "10.00",
         "thc": "50.00",
         "other": "0.00",

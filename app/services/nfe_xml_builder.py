@@ -169,7 +169,12 @@ class NfeXmlBuilder:
         self._text(di, "UFDesemb", duimp.get("clearance_state"))
         self._text(di, "dDesemb", duimp.get("clearance_date"))
         self._text(di, "tpViaTransp", duimp.get("transport_mode_code"))
-        self._optional_money(di, "vAFRMM", data.get("afrmm_value"))
+        if str(duimp.get("transport_mode_code")) == "1":
+            # A SEFAZ exige esta tag na via marítima mesmo quando o valor é zero.
+            # A TUM integra os custos, mas não o valor de AFRMM declarado aqui.
+            self._text(di, "vAFRMM", self._money(data.get("afrmm_value")))
+        else:
+            self._optional_money(di, "vAFRMM", data.get("afrmm_value"))
         intermediation = duimp.get("intermediation_type") or "1"
         self._text(di, "tpIntermedio", intermediation)
         third_party = str(duimp.get("third_party_tax_id") or "")

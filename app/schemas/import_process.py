@@ -354,7 +354,7 @@ class CreateNfeDocumentPlanSchema(Schema):
 
     @validates_schema
     def validate_additional_costs(self, data, **kwargs):
-        allowed = {"afrmm", "siscomex_fee", "thc", "other"}
+        allowed = {"afrmm", "tum", "siscomex_fee", "thc", "other"}
         costs = data.get("additional_costs") or {}
         unknown = sorted(set(costs) - allowed)
         if unknown:
@@ -405,6 +405,7 @@ class UpdateNfeDraftItemSchema(Schema):
 
 class NfeDraftAdditionalCostsSchema(Schema):
     afrmm = fields.Decimal(as_string=True, validate=validate.Range(min=0))
+    tum = fields.Decimal(as_string=True, validate=validate.Range(min=0))
     siscomex_fee = fields.Decimal(as_string=True, validate=validate.Range(min=0))
     thc = fields.Decimal(as_string=True, validate=validate.Range(min=0))
     other = fields.Decimal(as_string=True, validate=validate.Range(min=0))

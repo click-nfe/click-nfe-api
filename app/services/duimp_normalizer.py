@@ -43,6 +43,20 @@ class DuimpNormalizer:
         )
         version = payload.get("versao") or identification.get("versao")
         items = [self._normalize_portal_item(item) for item in raw_items]
+        item_merchandise = [
+            ((item.get("tributos") or {}).get("mercadoria") or {})
+            for item in raw_items
+        ]
+        has_item_afrmm = any("afrmm" in entry for entry in item_merchandise)
+        afrmm = (
+            sum((self._decimal(entry.get("afrmm")) for entry in item_merchandise), Decimal("0"))
+            if has_item_afrmm
+            else self._extract_afrmm(cargo)
+        )
+        tum = sum(
+            (self._decimal(entry.get("tum")) for entry in item_merchandise),
+            Decimal("0"),
+        )
         modalities = {item.get("import_modality") for item in items if item.get("import_modality")}
         third_party_ids = {
             item.get("third_party_tax_id")
@@ -77,7 +91,8 @@ class DuimpNormalizer:
             "transport_mode_code": self._string(
                 cargo.get("viaTransporteCodigo") or general.get("viaTransporteCodigo")
             ),
-            "afrmm_value": str(self._extract_afrmm(cargo)),
+            "afrmm_value": str(afrmm),
+            "tum_value": str(tum),
             "tax_totals": self._normalize_taxes(general_taxes),
             "intermediation_type": self._string(
                 general.get("tipoIntermedio") or "1"
@@ -347,6 +362,9 @@ class DuimpNormalizer:
             or raw_payload.get("transportModeCode"),
             "afrmm_value": str(
                 self._decimal(raw_payload.get("valorAfrmm") or raw_payload.get("afrmmValue"))
+            ),
+            "tum_value": str(
+                self._decimal(raw_payload.get("valorTum") or raw_payload.get("tumValue"))
             ),
             "tax_totals": raw_payload.get("totaisTributos")
             or raw_payload.get("taxTotals")

@@ -231,6 +231,8 @@ class NfeContextResolver:
         suggested_costs: dict[str, str] = {}
         if resolved.get("afrmm_value") not in (None, ""):
             suggested_costs["afrmm"] = str(resolved["afrmm_value"])
+        if resolved.get("tum_value") not in (None, ""):
+            suggested_costs["tum"] = str(resolved["tum_value"])
         tax_totals = resolved.get("tax_totals") or {}
         for tax_name in (
             "taxa_utilizacao",

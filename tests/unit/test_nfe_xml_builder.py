@@ -475,3 +475,16 @@ def test_duimp_item_number_missing_does_not_fall_back_to_one():
             data,
             access_key="41260700000000000191550010000144221763362375",
         )
+
+
+def test_maritime_afrmm_tag_is_present_even_when_zero_and_excludes_tum():
+    data = payload()
+    data["items"][0]["import_payload"]["afrmm_value"] = "0.00"
+    data["items"][0]["cost_allocation"] = {"afrmm": "0.00", "tum": "20.00"}
+    xml = NfeXmlBuilder().build(
+        data,
+        access_key="41260700000000000191550010000144221763362375",
+    )
+    root = ET.fromstring(xml)
+    assert root.findtext(".//nfe:DI/nfe:vAFRMM", namespaces=NS) == "0.00"
+    assert NfeXsdValidator().validate(xml, allow_unsigned=True).is_valid is True

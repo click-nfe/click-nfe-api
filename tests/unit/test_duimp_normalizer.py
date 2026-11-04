@@ -104,6 +104,7 @@ def test_normalizes_official_portal_payload_separating_fiscal_components():
     assert result["clearance_location_code"] == "0917800"
     assert result["clearance_state"] == "PR"
     assert result["afrmm_value"] == "12.34"
+    assert result["tum_value"] == "0"
     assert result["import_modality"] == "direct"
     assert result["foreign_supplier"]["name"] == "Fornecedor Exterior"
     assert result["tax_totals"]["ii"]["value"] == "180"
@@ -286,4 +287,21 @@ def test_portal_product_column_is_initial_editable_nfe_code():
     assert item["catalog_product_code"] == "204"
     assert item["catalog_internal_code"] == "Gray Pipe Gray"
     assert item["product_code"] == "204"
+
+
+def test_afrmm_and_tum_come_from_item_merchandise_when_cargo_reference_is_empty():
+    payload = portal_payload()
+    payload["dadosGerais"]["carga"]["multiplosConhecimentosCarga"]["cargasReferenciadas"] = None
+    payload["itens"][0]["tributos"]["mercadoria"].update(
+        {"afrmm": 6.46, "tum": 0.17}
+    )
+    second = deepcopy(payload["itens"][0])
+    second["identificacao"]["numeroItem"] = 2
+    second["tributos"]["mercadoria"].update({"afrmm": 6.73, "tum": 0.18})
+    payload["itens"].append(second)
+
+    normalized = DuimpNormalizer().normalize(payload)
+
+    assert Decimal(normalized["afrmm_value"]) == Decimal("13.19")
+    assert Decimal(normalized["tum_value"]) == Decimal("0.35")
 
