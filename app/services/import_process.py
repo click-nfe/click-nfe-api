@@ -4062,7 +4062,17 @@ class ImportNfeService:
         ]
         for field in allowed_fields:
             if field in payload:
-                setattr(item, field, payload[field])
+                if field == "import_payload":
+                    # O rateio e o AFRMM são calculados pela API. O editor
+                    # pode ter lido uma versão anterior à atualização das
+                    # despesas; não aceite esses valores de volta no PATCH.
+                    current = deepcopy(item.import_payload or {})
+                    incoming = deepcopy(payload[field] or {})
+                    for managed in ("cost_allocation", "afrmm_value"):
+                        incoming.pop(managed, None)
+                    item.import_payload = {**current, **incoming}
+                else:
+                    setattr(item, field, payload[field])
 
         item.updated_at = datetime.utcnow()
         self._refresh_draft_payload_from_items(draft)
