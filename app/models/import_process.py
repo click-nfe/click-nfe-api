@@ -63,6 +63,7 @@ class ExternalProvider(EnumMixin):
     GETT = "gett"
     SEFAZ = "sefaz"
     PRIVATE_FISCAL_API = "private_fiscal_api"
+    MANUAL_SPREADSHEET = "manual_spreadsheet"
 
 
 class FiscalEnvironment(EnumMixin):

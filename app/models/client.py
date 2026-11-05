@@ -73,6 +73,20 @@ class ClientContact(TimestampMixin, Base):
     ativo = Column(Boolean, nullable=False, default=True)
 
     client = relationship("Client", back_populates="contatos")
+
+
+class SimplifiedIssuanceTemplate(TimestampMixin, Base):
+    __tablename__ = "simplified_issuance_templates"
+
+    id = uuid_pk()
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True)
+    client_id = Column(UUID(as_uuid=True), ForeignKey("clients.id"), nullable=False, index=True)
+    name = Column(String(120), nullable=False)
+    description = Column(String(500), nullable=True)
+    config = Column(JSON, nullable=False)
+    active = Column(Boolean, nullable=False, default=True)
+
+    client = relationship("Client")
     
 class ClientFiscalProfile(Base):
     __tablename__ = "client_fiscal_profiles"
