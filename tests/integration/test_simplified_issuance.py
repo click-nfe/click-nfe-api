@@ -44,6 +44,64 @@ def test_client_config_is_reviewed_before_saving_and_copied_per_process(api):
         assert db.session.get(Client, UUID(client_id)).simplified_issuance_config["items"][0]["description"] == "Outro modelo"
 
 
+def test_named_templates_are_isolated_and_process_keeps_selected_snapshot(api):
+    client, headers, client_id = api
+    base = f"/clients/{client_id}/simplified-issuance/templates"
+    first = client.post(base, headers=headers, json={"name": "Revenda", "description": "Produtos para revenda", "config": config(description="Padrão")})
+    second = client.post(base, headers=headers, json={"name": "Industrialização", "description": "", "config": config(description="Outro")})
+    assert first.status_code == second.status_code == 201
+    first_id, second_id = first.get_json()["id"], second.get_json()["id"]
+    assert {item["name"] for item in client.get(base, headers=headers).get_json()["items"]} == {"Revenda", "Industrialização"}
+    started = client.post(f"/clients/{client_id}/simplified-issuance/start", headers=headers, json={"template_id": first_id, "duimp_number": "26BR0000000000-1"})
+    assert started.status_code == 201, started.get_json()
+    assert client.put(f"{base}/{first_id}", headers=headers, json={"name": "Revenda editada", "description": "", "config": config(description="Alterado")}).status_code == 200
+    with client.application.app_context():
+        process = db.session.get(ImportProcess, UUID(started.get_json()["id"]))
+        assert process.simplified_config_snapshot["items"][0]["description"] == "Padrão"
+    assert client.delete(f"{base}/{second_id}", headers=headers).status_code == 204
+    assert len(client.get(base, headers=headers).get_json()["items"]) == 1
+    assert client.post(f"/clients/{client_id}/simplified-issuance/start", headers=headers, json={"template_id": second_id}).status_code == 404
+
+
+def test_one_off_spreadsheet_configuration_does_not_change_client_default(api):
+    client, headers, client_id = api
+    response = client.post(f"/clients/{client_id}/simplified-issuance/start", headers=headers, json={"config": config(description="Somente esta operação")})
+    assert response.status_code == 201, response.get_json()
+    with client.application.app_context():
+        assert db.session.get(Client, UUID(client_id)).simplified_issuance_config is None
+        process = db.session.get(ImportProcess, UUID(response.get_json()["id"]))
+        assert process.simplified_config_snapshot["items"][0]["description"] == "Somente esta operação"
+
+
+def test_spreadsheet_manual_items_skip_portal_and_reject_incomplete_values(api):
+    client, headers, client_id = api
+    profile = client.put(f"/clients/{client_id}/fiscal-profile", headers=headers, json={
+        "legal_name": "Importadora Teste Ltda", "cnpj": "00000000000191", "state_registration": "1234567890", "tax_regime": "3",
+        "street": "Rua Teste", "number": "100", "district": "Centro", "city_code": "4106902", "city_name": "Curitiba", "state": "PR", "zip_code": "80000000",
+        "country_code": "1058", "country_name": "Brasil",
+    })
+    assert profile.status_code == 200
+    sequence = client.put(f"/clients/{client_id}/nfe-number-sequences", headers=headers, json={"environment": "production", "model": "55", "series": "1", "current_number": 10})
+    assert sequence.status_code == 200
+    number = "26BR0000000000-1"
+    process = client.post(f"/clients/{client_id}/simplified-issuance/start", headers=headers, json={"duimp_number": number, "config": config()})
+    assert process.status_code == 201
+    url = f"/import-processes/{process.get_json()['id']}/simplified-prepare"
+    payload = {"numero": number, "dataRegistro": "2026-10-28", "localDesembaraco": "Paranaguá", "ufDesembaraco": "PR", "dataDesembaraco": "2026-10-29", "viaTransporteCodigo": "1", "fornecedorEstrangeiro": {"name": "Fornecedor", "country_code": "1600", "country_name": "CHINA"}, "itens": [{"numeroItem": "1", "sequenciaAdicao": "1", "codigoProduto": "A-001", "descricao": "Produto", "ncm": "39172290", "unidade": "UN", "quantidade": "2", "valorProduto": "100", "valorUnitario": "50", "codigoExportador": "EXP-1"}]}
+    invalid = {**payload, "itens": [{**payload["itens"][0], "valorProduto": ""}]}
+    assert client.post(url, headers=headers, json={"manual_payload": invalid, "sign": False}).status_code == 400
+    response = client.post(url, headers=headers, json={"manual_payload": payload, "sign": False})
+    assert response.status_code == 200, response.get_json()
+    assert response.get_json()["process_id"] == process.get_json()["id"]
+    assert response.get_json()["status"] == "validated", response.get_json()
+    with client.application.app_context():
+        process_row = db.session.get(ImportProcess, UUID(process.get_json()["id"]))
+        from app.models import DuimpSnapshot
+        snapshot = DuimpSnapshot.query.filter_by(import_process_id=process_row.id).one()
+        assert getattr(snapshot.source_provider, "value", snapshot.source_provider) == "manual_spreadsheet"
+        assert snapshot.raw_payload["manual_source"] == "spreadsheet"
+
+
 def test_duimp_only_matches_exact_code_and_ncm_and_preserves_template_tax(api):
     client, headers, client_id = api
     url = f"/clients/{client_id}/simplified-issuance"

@@ -455,7 +455,7 @@ class ImportNfeService:
         now = datetime.utcnow()
         client = self.get_client_for_current_user(payload["importer_id"])
         simplified = payload.get("source") == ImportProcessSource.SIMPLIFIED.value
-        if simplified and not client.simplified_issuance_config:
+        if simplified and not (payload.get("simplified_config") or client.simplified_issuance_config):
             raise ValueError("Configure a emissão simplificada antes de iniciar o processo.")
 
         process = ImportProcess(
@@ -468,7 +468,7 @@ class ImportNfeService:
             duimp_number=payload.get("duimp_number"),
             duimp_version=payload.get("duimp_version"),
             source=payload.get("source") or ImportProcessSource.MANUAL.value,
-            simplified_config_snapshot=(deepcopy(client.simplified_issuance_config) if simplified else None),
+            simplified_config_snapshot=(deepcopy(payload.get("simplified_config") or client.simplified_issuance_config) if simplified else None),
             status=ImportProcessStatus.CREATED.value,
             created_by_user_id=self.user_id,
             created_at=now,
@@ -1757,6 +1757,51 @@ class ImportNfeService:
             self.apply_simplified_classifications(process, snapshot)
         db.session.flush()
         return snapshot
+
+    def create_spreadsheet_duimp_snapshot(self, process: ImportProcess, payload: dict[str, Any]) -> DuimpSnapshot:
+        """Manual import data with explicit provenance; never represent it as Portal data."""
+        from datetime import date
+        from decimal import Decimal, InvalidOperation
+
+        if not isinstance(payload, dict) or set(payload) - {"numero", "dataRegistro", "localDesembaraco", "ufDesembaraco", "dataDesembaraco", "viaTransporteCodigo", "fornecedorEstrangeiro", "itens"}:
+            raise ValueError("Dados manuais da planilha inválidos.")
+        if payload.get("numero") != process.duimp_number:
+            raise ValueError("A DUIMP da planilha difere da DUIMP do processo.")
+        for field in ("dataRegistro", "dataDesembaraco"):
+            try:
+                date.fromisoformat(payload[field])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(f"Informe {field} no formato AAAA-MM-DD para usar dados manuais.") from exc
+        if not payload.get("localDesembaraco") or len(str(payload["localDesembaraco"])) > 255 or not isinstance(payload.get("ufDesembaraco"), str) or len(payload["ufDesembaraco"]) != 2:
+            raise ValueError("Informe local e UF de desembaraço na planilha.")
+        if not str(payload.get("viaTransporteCodigo") or "").isdigit():
+            raise ValueError("Informe a via de transporte na planilha.")
+        supplier = payload.get("fornecedorEstrangeiro")
+        if not isinstance(supplier, dict) or not supplier.get("name") or not supplier.get("country_code") or not supplier.get("country_name"):
+            raise ValueError("Informe nome, código e nome do país do fornecedor estrangeiro na planilha.")
+        items = payload.get("itens")
+        if not isinstance(items, list) or not 1 <= len(items) <= 500:
+            raise ValueError("Informe de 1 a 500 itens da operação na planilha.")
+        numbers = set()
+        for index, item in enumerate(items, 1):
+            if not isinstance(item, dict) or set(item) - {"numeroItem", "codigoProduto", "descricao", "ncm", "unidade", "quantidade", "valorProduto", "valorUnitario", "valorFrete", "valorSeguro", "codigoExportador", "sequenciaAdicao", "codigoFabricante"}:
+                raise ValueError(f"Dados inválidos no item {index} da planilha.")
+            number = str(item.get("numeroItem") or "")
+            sequence = str(item.get("sequenciaAdicao") or "")
+            if not number.isdigit() or not 1 <= int(number) <= 99999 or int(number) in numbers or sequence != str(int(number)):
+                raise ValueError(f"Informe o número real e único do item {index} da DUIMP, de 1 a 99999.")
+            numbers.add(int(number))
+            if not item.get("codigoProduto") or not item.get("descricao") or len(str(item.get("ncm") or "")) != 8 or not str(item["ncm"]).isdigit() or not item.get("unidade") or not item.get("codigoExportador"):
+                raise ValueError(f"Complete código, descrição, NCM, unidade e exportador do item {index}.")
+            for field in ("quantidade", "valorProduto", "valorUnitario", "valorFrete", "valorSeguro"):
+                try:
+                    value = Decimal(str(item.get(field, "0")))
+                except (InvalidOperation, TypeError) as exc:
+                    raise ValueError(f"Valor inválido em {field} do item {index}.") from exc
+                if not value.is_finite() or value < 0 or field in {"quantidade", "valorProduto", "valorUnitario"} and value == 0:
+                    raise ValueError(f"Valor inválido em {field} do item {index}.")
+        normalized = self.normalize_duimp_payload(payload)
+        return self.create_manual_duimp_snapshot(process, {"duimp_number": process.duimp_number, "raw_payload": {**payload, "manual_source": "spreadsheet"}, "normalized_payload": normalized, "source_provider": ExternalProvider.MANUAL_SPREADSHEET.value})
 
     def fetch_duimp_for_process(
         self, process: ImportProcess, payload: dict[str, Any]

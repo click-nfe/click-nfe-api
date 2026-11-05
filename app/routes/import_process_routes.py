@@ -594,7 +594,7 @@ def prepare_simplified_xmls(process_id: str):
     if not process.simplified_config_snapshot:
         return bad_request_response(ValueError("Este processo não é uma emissão simplificada."))
     request_data = json_payload()
-    if set(request_data) - {"number", "sign", "duimp_payload", "duimp_overrides", "foreign_supplier", "additional_costs"}:
+    if set(request_data) - {"number", "sign", "duimp_payload", "manual_payload", "duimp_overrides", "foreign_supplier", "additional_costs"}:
         return bad_request_response(ValueError("Parâmetros não reconhecidos."))
     overrides = request_data.get("duimp_overrides") or {}
     supplier = request_data.get("foreign_supplier") or {}
@@ -620,9 +620,12 @@ def prepare_simplified_xmls(process_id: str):
         snapshot = service._snapshot_for_process(process)
     except ValueError:
         try:
-            snapshot = service.fetch_duimp_for_process(process, {
-                "duimp_payload": request_data.get("duimp_payload"), "enrich_catalog": True,
-            })["snapshot"]
+            if request_data.get("manual_payload") is not None:
+                snapshot = service.create_spreadsheet_duimp_snapshot(process, request_data["manual_payload"])
+            else:
+                snapshot = service.fetch_duimp_for_process(process, {
+                    "duimp_payload": request_data.get("duimp_payload"), "enrich_catalog": True,
+                })["snapshot"]
             db.session.commit()
         except PortalUnicoServiceUnavailableError:
             db.session.rollback()
