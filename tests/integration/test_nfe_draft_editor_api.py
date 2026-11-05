@@ -228,6 +228,40 @@ def test_additional_costs_reallocate_and_refresh_reconciliation(api):
     assert payload["audit_trail"][-1]["section"] == "additional_costs"
 
 
+def test_item_metadata_update_cannot_restore_stale_cost_allocation(api):
+    client, headers, _, draft_id, item_id, _, _ = api
+    costs = client.patch(
+        f"/nfe-drafts/{draft_id}",
+        headers=headers,
+        json={"additional_costs": {
+            "afrmm": "10.00", "tum": "2.00", "siscomex_fee": "5.00",
+        }},
+    )
+    assert costs.status_code == 200, costs.get_json()
+    item = client.patch(
+        f"/nfe-drafts/{draft_id}/items/{item_id}",
+        headers=headers,
+        json={"import_payload": {
+            "addition_number": "1",
+            "manufacturer_code": "FAB-1",
+            "cost_allocation": {},
+            "afrmm_value": "0.00",
+        }},
+    )
+    assert item.status_code == 200, item.get_json()
+    validated = client.post(f"/nfe-drafts/{draft_id}/validate", headers=headers)
+    assert validated.status_code == 200, validated.get_json()
+    assert not any(
+        error["field"] == "reconciliation"
+        for error in validated.get_json()["errors"]
+    ), validated.get_json()
+    detail = client.get(f"/nfe-drafts/{draft_id}", headers=headers).get_json()
+    assert detail["draft"]["fiscal_payload"]["totals"]["afrmm_value"] == "10.00"
+    assert detail["draft"]["fiscal_payload"]["totals"]["tum_value"] == "2.00"
+    assert detail["draft"]["fiscal_payload"]["totals"]["siscomex_fee"] == "5.00"
+    assert detail["items"][0]["import_payload"]["manufacturer_code"] == "FAB-1"
+
+
 def test_draft_editor_rejects_zero_bacen_country_code(api):
     client, headers, _, draft_id, _, _, _ = api
     response = client.patch(
