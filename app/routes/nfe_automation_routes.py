@@ -250,6 +250,9 @@ def resolve_nfe_context(process_id: str):
         db.session.rollback()
         return bad_request_response(exc)
     except Exception as exc:
+        current_app.logger.exception(
+            "Falha ao resolver contexto fiscal do processo %s", process_id
+        )
         db.session.rollback()
         return jsonify(
             {"error": "external_integration_error", "message": str(exc)}
