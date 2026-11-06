@@ -1,8 +1,9 @@
-from flask import Blueprint, g, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request
 from marshmallow import ValidationError
 
 from ..auth import admin_required, auth_required
 from ..extensions import db
+from ..integrations.portal_unico import portal_credential_resolver_from_config
 from ..schemas.nfe_automation import (
     BulkNfeItemClassificationSchema,
     ClientImportTaxRuleSchema,
@@ -39,7 +40,10 @@ tax_rule_schema = ClientImportTaxRuleSchema()
 
 
 def _service() -> ImportNfeService:
-    return ImportNfeService(current_user=g.current_user)
+    return ImportNfeService(
+        current_user=g.current_user,
+        credential_resolver=portal_credential_resolver_from_config(current_app.config),
+    )
 
 
 @client_import_tax_rule_bp.get("/<client_id>/import-tax-rules")
