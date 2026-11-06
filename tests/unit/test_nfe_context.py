@@ -294,6 +294,34 @@ def test_context_resolves_hafele_official_references_and_duimp_costs():
     }
 
 
+
+def test_maritime_ce_does_not_query_aerial_cct_with_hbl_number():
+    identifier = ImportNfeService._cargo_identifier(
+        {
+            "raw": {
+                "dadosGerais": {
+                    "carga": {
+                        "tipoIdentificacaoCarga": "CE",
+                        "identificacao": "152605347645800",
+                    },
+                    "documentos": {
+                        "documentosInstrucao": [
+                            {
+                                "tipo": {"codigo": "30"},
+                                "palavrasChave": [
+                                    {"codigo": "1", "valor": "CFSFL24380"}
+                                ],
+                            }
+                        ]
+                    },
+                }
+            }
+        }
+    )
+
+    assert identifier is None
+
+
 def test_cargo_identifier_prefers_air_waybill_over_ruc():
     identifier = ImportNfeService._cargo_identifier(
         {
