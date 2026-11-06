@@ -2135,9 +2135,7 @@ class ImportNfeService:
                 }
 
             cargo_identifier = self._cargo_identifier(normalized)
-            cargo = (((normalized.get("raw") or {}).get("dadosGerais") or {}).get("carga") or {})
-            # O endpoint de conhecimentos do CCT Aéreo não atende CE Mercante.
-            if cargo_identifier and str(cargo.get("tipoIdentificacaoCarga") or "").upper() != "CE":
+            if cargo_identifier:
                 external["cargo_knowledge"] = self._read_external_context(
                     process=process,
                     endpoint_name="cct.cargo_knowledge.get",
@@ -2475,10 +2473,14 @@ class ImportNfeService:
     def _cargo_identifier(normalized: dict[str, Any]) -> str | None:
         raw = normalized.get("raw") or {}
         general = raw.get("dadosGerais") or {}
+        cargo = general.get("carga") or {}
+        # CE Mercante usa o CCT aquaviário; não consultar conhecimentos do CCT Aéreo.
+        if str(cargo.get("tipoIdentificacaoCarga") or "").upper() == "CE":
+            return None
         documents = (general.get("documentos") or {}).get(
             "documentosInstrucao"
         ) or []
-        # Documento 30 é o conhecimento aéreo informado na própria DUIMP.
+        # Documento 30 pode identificar um conhecimento de carga aéreo.
         # Ele deve ser preferido à RUC para a consulta numeroConhecimento do CCT.
         for document in documents:
             document_type = str((document.get("tipo") or {}).get("codigo") or "")
@@ -2488,7 +2490,6 @@ class ImportNfeService:
                 value = keyword.get("valor")
                 if value not in (None, ""):
                     return str(value).strip()
-        cargo = general.get("carga") or {}
         value = cargo.get("identificacao")
         return str(value).strip() if value not in (None, "") else None
 
