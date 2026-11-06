@@ -735,7 +735,7 @@ def test_context_refresh_creates_versioned_snapshot_and_reuses_official_cache(
     monkeypatch.setattr(
         ImportNfeService,
         "_find_provider_connection",
-        lambda *_args, **_kwargs: SimpleNamespace(config_json={}),
+        lambda *_args, **_kwargs: SimpleNamespace(config_json={"tabx_customs_unit_table": "UNIDADE_ADUANEIRA"}),
     )
     monkeypatch.setattr(
         ImportNfeService,
