@@ -73,6 +73,38 @@ def test_context_resolver_combines_official_sources_and_explicit_overrides():
     assert "unknown" not in result["normalized"]
 
 
+
+def test_context_uses_ce_mercante_for_maritime_mode_and_preserves_tabx_country_name():
+    result = NfeContextResolver().resolve(
+        normalized={
+            "registration_date": "2026-11-04",
+            "raw": {
+                "dadosGerais": {
+                    "carga": {"tipoIdentificacaoCarga": "CE", "identificacao": "152605347645800"}
+                }
+            },
+            "foreign_supplier": {"name": "BENEBONE LLC", "country_iso_alpha_2": "US"},
+        },
+        external={
+            "country": {
+                "nomeTabela": "PAIS",
+                "dados": [{"campos": [
+                    {"nome": "SIGLA_ISO2", "valor": "US"},
+                    {"nome": "NOME", "valor": "Estados Unidos"},
+                    {"nome": "CODIGO_NUMERICO", "valor": "249"},
+                ]}],
+            }
+        },
+    )
+
+    assert result["normalized"]["transport_mode_code"] == "1"
+    assert result["fields"]["transport_mode_code"]["source"] == "duimp"
+    assert result["normalized"]["foreign_supplier"]["country_name"] == "Estados Unidos"
+    assert result["fields"]["foreign_supplier.country_name"]["source"] == "portal_unico_tabx"
+    assert result["normalized"]["foreign_supplier"].get("country_code") is None
+    assert "clearance_date" in result["missing_fields"]
+
+
 def test_context_resolver_keeps_unconfirmed_fields_missing():
     result = NfeContextResolver().resolve(
         normalized={
@@ -260,6 +292,34 @@ def test_context_resolves_hafele_official_references_and_duimp_costs():
         "afrmm": "0",
         "siscomex_fee": "285.34",
     }
+
+
+
+def test_maritime_ce_does_not_query_aerial_cct_with_hbl_number():
+    identifier = ImportNfeService._cargo_identifier(
+        {
+            "raw": {
+                "dadosGerais": {
+                    "carga": {
+                        "tipoIdentificacaoCarga": "CE",
+                        "identificacao": "152605347645800",
+                    },
+                    "documentos": {
+                        "documentosInstrucao": [
+                            {
+                                "tipo": {"codigo": "30"},
+                                "palavrasChave": [
+                                    {"codigo": "1", "valor": "CFSFL24380"}
+                                ],
+                            }
+                        ]
+                    },
+                }
+            }
+        }
+    )
+
+    assert identifier is None
 
 
 def test_cargo_identifier_prefers_air_waybill_over_ruc():

@@ -30,6 +30,12 @@ def test_country_migration_seeds_and_preserves_existing_metadata(tmp_path):
         upgrade(revision="d3c9f7a21e84")
         assert db.session.query(FiscalCountry).count() == 253
         assert db.session.get(FiscalCountry, "1058").name == "BRASIL"
+        # O catálogo BACEN local não traz ISO para todos os países; o nome do
+        # TABX ainda deve localizar o código fiscal da NF-e.
+        us = FiscalReferenceService.find_country(
+            name="Estados Unidos", active_on=datetime.utcnow().date()
+        )
+        assert us is not None and us.bacen_code == "2496"
         china = db.session.get(FiscalCountry, "1600")
         assert (china.name, china.active, china.iso_alpha_2, china.iso_alpha_3) == (
             "CHINA, REPUBLICA POPULAR", True, "CN", "CHN",

@@ -159,7 +159,7 @@ class ImportNfeService:
     DEFAULT_NFE_ENVIRONMENT = FiscalEnvironment.PRODUCTION.value
     DEFAULT_PROVIDER_ENVIRONMENT = FiscalEnvironment.PRODUCTION.value
     DEFAULT_NFE_SERIES = "1"
-    DEFAULT_TABX_CUSTOMS_UNIT_TABLE = "UNIDADE_ADUANEIRA"
+    DEFAULT_TABX_CUSTOMS_UNIT_TABLE = None
     DEFAULT_TABX_COUNTRY_TABLE = "PAIS"
 
     def __init__(
@@ -2250,11 +2250,30 @@ class ImportNfeService:
                         ),
                         iso_field=iso_field,
                     )
+                    if not cached_country:
+                        tabx_row = FiscalReferenceService._first_tabx_row(
+                            external["country"]
+                        )
+                        tabx_name = FiscalReferenceService._tabx_value(
+                            tabx_row or {},
+                            connection_config.get("tabx_country_name_field", "NOME"),
+                        )
+                        tabx_iso = FiscalReferenceService._tabx_value(
+                            tabx_row or {}, iso_field
+                        )
+                        if tabx_name and str(tabx_iso or "").upper() == str(country_iso).upper():
+                            cached_country = FiscalReferenceService.find_country(
+                                name=str(tabx_name),
+                                active_on=(
+                                    self._date_value(normalized.get("registration_date"))
+                                    or date.today()
+                                ),
+                            )
                     if cached_country:
                         external["cached_country"] = {
                             "code": cached_country.bacen_code,
                             "name": cached_country.name,
-                            "iso_alpha_2": cached_country.iso_alpha_2,
+                            "iso_alpha_2": cached_country.iso_alpha_2 or country_iso,
                             "iso_alpha_3": cached_country.iso_alpha_3,
                         }
 
@@ -2454,10 +2473,14 @@ class ImportNfeService:
     def _cargo_identifier(normalized: dict[str, Any]) -> str | None:
         raw = normalized.get("raw") or {}
         general = raw.get("dadosGerais") or {}
+        cargo = general.get("carga") or {}
+        # CE Mercante usa o CCT aquaviário; não consultar conhecimentos do CCT Aéreo.
+        if str(cargo.get("tipoIdentificacaoCarga") or "").upper() == "CE":
+            return None
         documents = (general.get("documentos") or {}).get(
             "documentosInstrucao"
         ) or []
-        # Documento 30 é o conhecimento aéreo informado na própria DUIMP.
+        # Documento 30 pode identificar um conhecimento de carga aéreo.
         # Ele deve ser preferido à RUC para a consulta numeroConhecimento do CCT.
         for document in documents:
             document_type = str((document.get("tipo") or {}).get("codigo") or "")
@@ -2467,7 +2490,6 @@ class ImportNfeService:
                 value = keyword.get("valor")
                 if value not in (None, ""):
                     return str(value).strip()
-        cargo = general.get("carga") or {}
         value = cargo.get("identificacao")
         return str(value).strip() if value not in (None, "") else None
 

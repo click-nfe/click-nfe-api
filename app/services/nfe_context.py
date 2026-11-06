@@ -85,6 +85,13 @@ class NfeContextResolver:
                     "local_fiscal_reference",
                 )
 
+        # CE Mercante identifica carga do modal marítimo na própria DUIMP.
+        cargo = ((resolved.get("raw") or {}).get("dadosGerais") or {}).get("carga") or {}
+        if str(cargo.get("tipoIdentificacaoCarga") or "").upper() == "CE":
+            self._set_if_missing(
+                resolved, sources, "transport_mode_code", "1", "duimp"
+            )
+
         knowledge = self._first_active_knowledge(external.get("cargo_knowledge"))
         if knowledge:
             knowledge_type = str(knowledge.get("tipo") or "").upper()
@@ -156,7 +163,7 @@ class NfeContextResolver:
                 sources["foreign_supplier.country_code"] = (
                     "local_fiscal_reference"
                 )
-        elif supplier != (resolved.get("foreign_supplier") or {}):
+        if supplier != (resolved.get("foreign_supplier") or {}):
             resolved["foreign_supplier"] = supplier
 
         for field, value in overrides.items():
