@@ -156,7 +156,7 @@ class NfeContextResolver:
                 sources["foreign_supplier.country_code"] = (
                     "local_fiscal_reference"
                 )
-        elif supplier != (resolved.get("foreign_supplier") or {}):
+        if supplier != (resolved.get("foreign_supplier") or {}):
             resolved["foreign_supplier"] = supplier
 
         for field, value in overrides.items():
