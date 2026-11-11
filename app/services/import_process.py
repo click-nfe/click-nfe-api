@@ -4016,13 +4016,12 @@ class ImportNfeService:
                     fiscal_payload.get("recipient"),
                     recipient_update,
                 )
-        if "foreign_id_mode" in (payload.get("document") or {}):
-            recipient = fiscal_payload.setdefault("recipient", {})
-            if fiscal_payload["document"].get("foreign_id_mode") == "zero_placeholder":
-                recipient.setdefault("foreign_id_from_source", recipient.get("foreign_id"))
-                recipient["foreign_id"] = "00.000.000/0000-00"
-            elif recipient.get("foreign_id_from_source") is not None:
-                recipient["foreign_id"] = recipient["foreign_id_from_source"]
+        recipient = fiscal_payload.setdefault("recipient", {})
+        if fiscal_payload.get("document", {}).get("foreign_id_mode") == "zero_placeholder":
+            recipient.setdefault("foreign_id_from_source", recipient.get("foreign_id"))
+            recipient["foreign_id"] = "00.000.000/0000-00"
+        elif "foreign_id_mode" in (payload.get("document") or {}) and recipient.get("foreign_id_from_source") is not None:
+            recipient["foreign_id"] = recipient["foreign_id_from_source"]
 
         volume_update = (
             (payload.get("transport") or {}).get("volume") or {}

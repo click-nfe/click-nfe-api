@@ -187,6 +187,9 @@ def test_simplified_draft_uses_client_code_and_tax_without_number(api):
     item_id = client.get(f"/nfe-drafts/{draft['id']}", headers=headers).get_json()["items"][0]["id"]
     manual = client.patch(f"/nfe-drafts/{draft['id']}/items/{item_id}", headers=headers, json={"product_code": "MANUAL-1"})
     assert manual.status_code == 200, manual.get_json()
+    still_zero = client.patch(f"/nfe-drafts/{draft['id']}", headers=headers, json={"foreign_supplier": {"foreign_id": "OTHER-ID"}})
+    assert still_zero.status_code == 200, still_zero.get_json()
+    assert still_zero.get_json()["draft"]["fiscal_payload"]["recipient"]["foreign_id"] == "00.000.000/0000-00"
     changed = client.patch(f"/nfe-drafts/{draft['id']}", headers=headers, json={"document": {"product_code_source": "duimp", "foreign_id_mode": "source"}})
     assert changed.status_code == 200, changed.get_json()
     assert changed.get_json()["items"][0]["product_code"] == "MANUAL-1"
