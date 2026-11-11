@@ -5,6 +5,7 @@ from uuid import UUID
 from app.models import Client, ImportProcess, NfeItemClassification
 from tests.integration.test_import_nfe_api_flow import api  # noqa: F401 - shared isolated SQLite fixture
 from app.services.simplified_issuance import normalize_config, draft_defaults, reconcile
+from tests.unit.test_duimp_normalizer import portal_payload
 
 
 def config(*, code="A-001", description="Produto padrão"):
@@ -151,7 +152,9 @@ def test_simplified_draft_uses_client_code_and_tax_without_number(api):
         "country_code": "1058", "country_name": "Brasil",
     })
     assert profile.status_code == 200
-    client.put(f"/clients/{client_id}/simplified-issuance", headers=headers, json=config(code="PROD-001"))
+    template = config(code="PROD-001")
+    template["document"].update({"product_code_source": "part_number", "foreign_id_mode": "zero_placeholder"})
+    client.put(f"/clients/{client_id}/simplified-issuance", headers=headers, json=template)
     process_id = client.post(f"/clients/{client_id}/simplified-issuance/start", headers=headers).get_json()["id"]
     response = client.post(f"/import-processes/{process_id}/nfe-draft/from-duimp", headers=headers, json={
         "duimp_payload": {
@@ -166,7 +169,7 @@ def test_simplified_draft_uses_client_code_and_tax_without_number(api):
                 "tributos": {"ii": {"base": "6054.39", "rate": "10.8", "value": "653.87"}},
             }],
         },
-        "foreign_supplier": {"name": "Foreign Supplier Ltd", "country_code": "1600",
+        "foreign_supplier": {"name": "Foreign Supplier Ltd", "foreign_id": "84-1559729", "country_code": "1600",
             "country_name": "CHINA", "address": {"street": "EXTERIOR", "number": "0",
             "district": "EXTERIOR", "city_name": "EXTERIOR"}},
     })
@@ -176,8 +179,21 @@ def test_simplified_draft_uses_client_code_and_tax_without_number(api):
     with client.application.app_context():
         stored = db.session.get(__import__("app.models", fromlist=["NfeDraft"]).NfeDraft, UUID(draft["id"]))
         assert stored.fiscal_payload["items"][0]["product_code"] == "INTERNO-1"
+        assert stored.fiscal_payload["items"][0]["import_payload"]["product_code_source"] == "simplified_template"
+        assert stored.fiscal_payload["recipient"]["foreign_id"] == "00.000.000/0000-00"
+        assert stored.fiscal_payload["recipient"]["foreign_id_from_source"] == "84-1559729"
         assert stored.fiscal_payload["items"][0]["description"] == "Produto padrão"
         assert stored.fiscal_payload["source"]["simplified_issuance"] is True
+    item_id = client.get(f"/nfe-drafts/{draft['id']}", headers=headers).get_json()["items"][0]["id"]
+    manual = client.patch(f"/nfe-drafts/{draft['id']}/items/{item_id}", headers=headers, json={"product_code": "MANUAL-1"})
+    assert manual.status_code == 200, manual.get_json()
+    still_zero = client.patch(f"/nfe-drafts/{draft['id']}", headers=headers, json={"foreign_supplier": {"foreign_id": "OTHER-ID"}})
+    assert still_zero.status_code == 200, still_zero.get_json()
+    assert still_zero.get_json()["draft"]["fiscal_payload"]["recipient"]["foreign_id"] == "00.000.000/0000-00"
+    changed = client.patch(f"/nfe-drafts/{draft['id']}", headers=headers, json={"document": {"product_code_source": "duimp", "foreign_id_mode": "source"}})
+    assert changed.status_code == 200, changed.get_json()
+    assert changed.get_json()["items"][0]["product_code"] == "MANUAL-1"
+    assert changed.get_json()["draft"]["fiscal_payload"]["recipient"]["foreign_id"] == "84-1559729"
 
 
 def test_extended_workbook_fields_are_validated_and_applied_to_draft_defaults():
@@ -186,10 +202,49 @@ def test_extended_workbook_fields_are_validated_and_applied_to_draft_defaults():
                      "payment": {"method": "90", "value": "0"}})
     template["items"][0]["tax_configuration"].update({"icms_origin": "1", "ipi_cst": "49"})
     normalized = normalize_config(template)
+    template["document"].update({"product_code_source": "part_number", "foreign_id_mode": "zero_placeholder"})
+    assert draft_defaults(normalize_config(template))["document"]["product_code_source"] == "part_number"
+    template["document"]["product_code_source"] = "unknown"
+    with pytest.raises(ValueError, match="Origem do código"):
+        normalize_config(template)
     defaults = draft_defaults(normalized)
     assert defaults["transport"]["volume"] == {"quantity": 80, "species": "CAIXA", "gross_weight": "1500"}
     assert defaults["payment"] == {"method": "90", "value": "0"}
     assert normalized["items"][0]["tax_configuration"]["icms_origin"] == "1"
+
+
+def test_draft_can_use_single_catalogue_code_and_restore_duimp_code(api):
+    client, headers, client_id = api
+    profile = client.put(f"/clients/{client_id}/fiscal-profile", headers=headers, json={
+        "legal_name": "Importadora Teste Ltda", "cnpj": "00000000000191",
+        "state_registration": "1234567890", "tax_regime": "3",
+        "street": "Rua Teste", "number": "100", "district": "Centro",
+        "city_code": "4106902", "city_name": "Curitiba", "state": "PR",
+        "zip_code": "80000000", "country_code": "1058", "country_name": "Brasil",
+    })
+    assert profile.status_code == 200
+    rule = client.post(f"/clients/{client_id}/import-tax-rules", headers=headers, json={
+        "name": "Revenda direta", "issuer_state": "PR", "import_purpose": "resale",
+        "import_modality": "direct", "tax_regime": "3", "priority": 100,
+        "configuration_json": {"cfop": "3102", "icms_rate": "12", "icms_origin": "1", "icms_cst": "90"},
+    })
+    assert rule.status_code == 201, rule.get_json()
+    process = client.post("/import-processes", headers=headers, json={"importer_id": client_id})
+    assert process.status_code == 201, process.get_json()
+    source = portal_payload()
+    source["itens"][0]["produto"]["catalogo"] = {"codigosInterno": ["13560"]}
+    created = client.post(f"/import-processes/{process.get_json()['id']}/nfe-draft/from-duimp", headers=headers, json={
+        "duimp_payload": source, "environment": "production", "series": "1",
+        "import_purpose": "resale", "document": {"product_code_source": "part_number"},
+    })
+    assert created.status_code == 201, created.get_json()
+    draft_id = created.get_json()["draft"]["id"]
+    detail = client.get(f"/nfe-drafts/{draft_id}", headers=headers).get_json()
+    assert detail["items"][0]["product_code"] == "13560"
+    assert detail["items"][0]["import_payload"]["product_code_source"] == "part_number"
+    restored = client.patch(f"/nfe-drafts/{draft_id}", headers=headers, json={"document": {"product_code_source": "duimp"}})
+    assert restored.status_code == 200, restored.get_json()
+    assert restored.get_json()["items"][0]["product_code"] == "215"
 
 
 def test_icms_workbook_fields_validate_without_automatically_confirming_tax_treatment():

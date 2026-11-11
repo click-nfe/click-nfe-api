@@ -93,3 +93,11 @@ def test_part_number_is_preserved_in_draft_without_changing_cprod():
     assert item["product_code"] == "33"
     assert item["import_payload"]["part_number"] == "13560"
     assert item["import_payload"]["part_numbers"] == ["13560"]
+
+
+def test_part_number_preference_requires_one_code_within_nfe_limit():
+    choose = ImportNfeService._usable_part_number
+    assert choose({"part_number": "13560", "part_numbers": ["13560"]}) == "13560"
+    assert choose({"part_number": "A", "part_numbers": ["A", "B"]}) is None
+    assert choose({"part_number": "X" * 61, "part_numbers": ["X" * 61]}) is None
+    assert choose({"part_number": "", "part_numbers": []}) is None

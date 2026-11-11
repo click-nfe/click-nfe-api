@@ -202,6 +202,12 @@ class FetchDuimpSchema(Schema):
 
 
 class NfeDocumentOptionsSchema(Schema):
+    product_code_source = fields.String(
+        validate=validate.OneOf(["duimp", "part_number"]),
+    )
+    foreign_id_mode = fields.String(
+        validate=validate.OneOf(["source", "zero_placeholder"]),
+    )
     operation_nature = fields.String(
         allow_none=True,
         validate=validate.Length(min=1, max=60),
