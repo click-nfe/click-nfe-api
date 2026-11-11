@@ -3786,6 +3786,8 @@ class ImportNfeService:
                 for source, target in (("product_code", "product_code"), ("description", "description"), ("unit", "commercial_unit")):
                     if template.get(source):
                         item[target] = template[source]
+                        if target == "product_code":
+                            item.setdefault("import_payload", {})["product_code_source"] = "simplified_template"
                 if template.get("unit"):
                     item["taxable_unit"] = template["unit"]
                 item.setdefault("import_payload", {})["simplified_template_index"] = entry["template_index"]
@@ -3927,6 +3929,9 @@ class ImportNfeService:
         )
         now = datetime.utcnow()
         fiscal_payload = deepcopy(draft.fiscal_payload or {})
+        if "foreign_id_mode" in (payload.get("document") or {}):
+            recipient = fiscal_payload.setdefault("recipient", {})
+            recipient.setdefault("foreign_id_from_source", recipient.get("foreign_id"))
         previous_additional_costs = deepcopy(
             fiscal_payload.get("additional_costs") or {}
         )
@@ -3937,6 +3942,27 @@ class ImportNfeService:
                     fiscal_payload.get(section),
                     payload[section],
                 )
+        if "product_code_source" in (payload.get("document") or {}):
+            requested_source = fiscal_payload["document"].get("product_code_source") or "duimp"
+            for row in rows:
+                import_data = deepcopy(row.import_payload or {})
+                if import_data.get("product_code_source") in ("manual", "simplified_template"):
+                    continue
+                duimp_code = str(import_data.get("catalog_product_code") or "").strip()
+                part_number = self._usable_part_number(import_data)
+                selected = (
+                    part_number if requested_source == "part_number" and part_number
+                    else duimp_code if 0 < len(duimp_code) <= 60
+                    else f"{row.item_number:05d}"
+                )
+                row.product_code = selected
+                import_data["product_code_source"] = (
+                    "part_number" if selected == part_number and requested_source == "part_number" and part_number
+                    else "portal_product_code" if selected == duimp_code and duimp_code
+                    else "generated_sequence"
+                )
+                row.import_payload = import_data
+                row.updated_at = now
         if replace_transport_carrier:
             fiscal_payload.setdefault("transport", {})["carrier"] = deepcopy(
                 payload["transport"].get("carrier")
@@ -3990,6 +4016,13 @@ class ImportNfeService:
                     fiscal_payload.get("recipient"),
                     recipient_update,
                 )
+        if "foreign_id_mode" in (payload.get("document") or {}):
+            recipient = fiscal_payload.setdefault("recipient", {})
+            if fiscal_payload["document"].get("foreign_id_mode") == "zero_placeholder":
+                recipient.setdefault("foreign_id_from_source", recipient.get("foreign_id"))
+                recipient["foreign_id"] = "00.000.000/0000-00"
+            elif recipient.get("foreign_id_from_source") is not None:
+                recipient["foreign_id"] = recipient["foreign_id_from_source"]
 
         volume_update = (
             (payload.get("transport") or {}).get("volume") or {}
@@ -4142,6 +4175,10 @@ class ImportNfeService:
                     item.import_payload = {**current, **incoming}
                 else:
                     setattr(item, field, payload[field])
+                    if field == "product_code":
+                        import_data = deepcopy(item.import_payload or {})
+                        import_data["product_code_source"] = "manual"
+                        item.import_payload = import_data
 
         item.updated_at = datetime.utcnow()
         self._refresh_draft_payload_from_items(draft)
@@ -4863,6 +4900,14 @@ class ImportNfeService:
             import_purpose=import_purpose,
             item_classifications=item_classifications,
         )
+        document_options = document_options or {}
+        if document_options.get("product_code_source") == "part_number":
+            for item in items:
+                import_data = item["import_payload"]
+                part_number = self._usable_part_number(import_data)
+                if part_number:
+                    item["product_code"] = part_number
+                    import_data["product_code_source"] = "part_number"
         item_defaults = item_defaults or {}
         for item in items:
             if item_defaults.get("commercial_unit"):
@@ -4913,6 +4958,9 @@ class ImportNfeService:
             duimp,
             override=foreign_supplier,
         )
+        recipient["foreign_id_from_source"] = recipient.get("foreign_id")
+        if document_options.get("foreign_id_mode") == "zero_placeholder":
+            recipient["foreign_id"] = "00.000.000/0000-00"
         duimp_data = {
             "number": duimp["number"],
             "api_number": duimp.get("api_number"),
@@ -4978,6 +5026,8 @@ class ImportNfeService:
                 "mixed_import_purposes": mixed_import_purposes,
                 "import_modality": duimp.get("import_modality"),
                 "currency": "BRL",
+                "product_code_source": document_options.get("product_code_source") or "duimp",
+                "foreign_id_mode": document_options.get("foreign_id_mode") or "source",
             },
             "import_process": {
                 "id": str(process.id),
@@ -5000,6 +5050,15 @@ class ImportNfeService:
                 "fiscal_profile_id": str(fiscal_profile.id),
             },
         }
+
+    @staticmethod
+    def _usable_part_number(import_data: dict[str, Any]) -> str | None:
+        """Only a single, XML-compatible catalogue code can replace cProd."""
+        codes = import_data.get("part_numbers") or []
+        code = str(import_data.get("part_number") or "").strip()
+        if len(codes) > 1 or not 0 < len(code) <= 60:
+            return None
+        return code
 
     def resolve_additional_costs(
         self,

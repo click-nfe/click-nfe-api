@@ -6,7 +6,7 @@ from decimal import Decimal, InvalidOperation
 
 from app.models.import_process import ImportPurpose
 
-DOCUMENT = {"operation_nature", "presence_indicator", "intermediary_indicator"}
+DOCUMENT = {"operation_nature", "presence_indicator", "intermediary_indicator", "product_code_source", "foreign_id_mode"}
 TRANSPORT = {"freight_mode", "carrier_name", "carrier_tax_id", "carrier_state_registration", "carrier_address", "carrier_city", "carrier_state"}
 ITEM = {"reference", "product_code", "description", "ncm", "cfop", "unit", "import_purpose", "tax_configuration"}
 TAX = {"ii_rate", "ipi_rate", "pis_rate", "cofins_rate", "icms_cst", "icms_origin", "ipi_cst", "pis_cst", "cofins_cst", "icms_rate", "icms_base_reduction_rate", "icms_deferment_rate", "icms_st_base_method", "icms_st_mva_rate", "icms_st_base_reduction_rate", "icms_st_rate", "icms_st_retained_base", "icms_st_retained_rate", "icms_st_retained_value", "icms_tax_treatment_confirmed"}
@@ -38,6 +38,10 @@ def normalize_config(data: object) -> dict:
         raise ValueError("Indicador de presença inválido.")
     if document.get("intermediary_indicator", "") not in ("", "0", "1"):
         raise ValueError("Indicador de intermediador inválido.")
+    if document.get("product_code_source", "") not in ("", "duimp", "part_number"):
+        raise ValueError("Origem do código do produto inválida.")
+    if document.get("foreign_id_mode", "") not in ("", "source", "zero_placeholder"):
+        raise ValueError("Opção de identificação estrangeira inválida.")
     if transport.get("freight_mode", "") not in ("", "0", "1", "2", "3", "4", "9"):
         raise ValueError("Modalidade do frete inválida; use 0, 1, 2, 3, 4 ou 9.")
     if len(transport.get("carrier_name", "")) > 60 or len(transport.get("carrier_state", "")) not in (0, 2):
