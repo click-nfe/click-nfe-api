@@ -2636,6 +2636,8 @@ class ImportNfeService:
                 {
                     "duimp_item_number": number,
                     "product_code": source.get("product_code"),
+                    "part_number": source.get("part_number") or source.get("catalog_internal_code"),
+                    "part_numbers": source.get("part_numbers") or [],
                     "description": source.get("description"),
                     "ncm": source.get("ncm"),
                     "exporter_code": (
@@ -5218,10 +5220,14 @@ class ImportNfeService:
             if len(portal_product_code) > 60:
                 portal_product_code = ""
             internal_catalog_code = item.get("catalog_internal_code")
-            if from_portal and not internal_catalog_code:
+            internal_catalog_codes = item.get("part_numbers") or (
+                [internal_catalog_code] if internal_catalog_code else []
+            )
+            if from_portal and not internal_catalog_code and not internal_catalog_codes:
                 previous_code = item.get("catalog_product_code")
                 if previous_code and str(previous_code).strip() != portal_product_code:
                     internal_catalog_code = previous_code
+                    internal_catalog_codes = [str(previous_code)]
             classification = item_classifications.get(str(item["number"]))
             item_purpose = (
                 classification.import_purpose
@@ -5306,6 +5312,8 @@ class ImportNfeService:
                         "duimp_item_number": item["number"],
                         "catalog_product_code": portal_product_code if from_portal else item.get("catalog_product_code"),
                         "catalog_internal_code": internal_catalog_code,
+                        "part_number": internal_catalog_code,
+                        "part_numbers": internal_catalog_codes,
                         "catalog_product_id": item.get("catalog_product_id"),
                         "product_code_source": (
                             "portal_product_code" if portal_product_code else "generated_sequence"

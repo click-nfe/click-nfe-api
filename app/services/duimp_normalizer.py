@@ -163,18 +163,9 @@ class DuimpNormalizer:
             catalog.get("descricao"),
         )
         manufacturer_code = self._string(manufacturer.get("codigo"))
-        catalog_codes = catalog.get("codigosInterno")
-        if isinstance(catalog_codes, list):
-            catalog_code = next((code for code in catalog_codes if code), None)
-        else:
-            catalog_code = catalog_codes if isinstance(catalog_codes, str) else None
-
         portal_product_code = self._string(product.get("codigo"))
-        internal_product_code = self._string(
-            product.get("codigoInternoNfe")
-            or product.get("codigoInterno")
-            or catalog_code
-        )
+        internal_codes = self._catalog_internal_codes(product, catalog)
+        internal_product_code = internal_codes[0] if len(internal_codes) == 1 else None
 
         return {
             "number": str(identification.get("numeroItem") or ""),
@@ -183,6 +174,8 @@ class DuimpNormalizer:
             "product_code": portal_product_code,
             "catalog_product_code": portal_product_code,
             "catalog_internal_code": internal_product_code,
+            "part_number": internal_product_code,
+            "part_numbers": internal_codes,
             "catalog_product_id": portal_product_code,
             "product_version": self._string(product.get("versao")),
             "description": description,
@@ -234,6 +227,22 @@ class DuimpNormalizer:
             "manufacturer": self._foreign_operator(manufacturer),
             "raw": raw_item,
         }
+
+    @staticmethod
+    def _catalog_internal_codes(product: dict[str, Any], catalog: dict[str, Any]) -> list[str]:
+        """Retain catalog codes as text, without stringifying JSON objects or arrays."""
+        values: list[str] = []
+        for source in (product, catalog):
+            for key in ("codigoInternoNfe", "codigoInterno", "codigoInternoProduto", "codigosInterno", "codigosInternos"):
+                raw = source.get(key)
+                for entry in raw if isinstance(raw, list) else [raw]:
+                    if isinstance(entry, dict):
+                        entry = entry.get("codigo") or entry.get("valor") or entry.get("codigoInterno")
+                    if isinstance(entry, (str, int)):
+                        code = str(entry).strip()
+                        if code and code not in values:
+                            values.append(code)
+        return values
 
     def _normalize_legacy(self, raw_payload: dict[str, Any]) -> dict[str, Any]:
         raw_items = raw_payload.get("itens") or raw_payload.get("items") or []

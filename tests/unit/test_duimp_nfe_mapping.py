@@ -70,3 +70,26 @@ def test_portal_item_without_product_column_keeps_editable_sequence_fallback():
     assert item["product_code"] == "00001"
     assert item["import_payload"]["product_code_source"] == "generated_sequence"
     assert item["import_payload"]["catalog_internal_code"] == "Gray Pipe Gray"
+
+
+def test_part_number_is_preserved_in_draft_without_changing_cprod():
+    service = object.__new__(ImportNfeService)
+    duimp = {
+        "number": "26BR0000000000-1",
+        "raw": {"provider": "portal_unico"},
+        "items": [{
+            "number": "1", "catalog_product_id": "33", "product_code": "33",
+            "catalog_internal_code": "13560", "part_numbers": ["13560"],
+            "description": "SAKE", "ncm": "22060090", "commercial_unit": "UN",
+            "quantity": "1", "unit_value": "10", "product_value": "10",
+            "taxable_unit": "UN", "taxable_quantity": "1", "taxable_unit_value": "10",
+        }],
+    }
+
+    item = service.map_duimp_items_to_nfe_items(
+        duimp=duimp, import_purpose=ImportPurpose.RESALE.value,
+    )[0]
+
+    assert item["product_code"] == "33"
+    assert item["import_payload"]["part_number"] == "13560"
+    assert item["import_payload"]["part_numbers"] == ["13560"]
