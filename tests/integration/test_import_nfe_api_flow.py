@@ -260,6 +260,12 @@ def test_api_flow_from_manual_duimp_snapshot_to_unsigned_xml(api):
     xsd_body = xsd_response.get_json()
     assert xsd_body["xsd_valid"] is True
     assert xsd_body["xsd_errors"] == []
+    unsigned_preview = client.get(
+        f"/nfe-drafts/{draft_id}/xml-versions/{xml_version_id}/danfe-preview",
+        headers=headers,
+    )
+    assert unsigned_preview.status_code == 200
+    assert unsigned_preview.data.startswith(b"%PDF-")
     assert xsd_body["schema"] == {
         "package": "PL_010e_v1.02",
         "file": "nfe_v4.00.xsd",
@@ -1636,6 +1642,10 @@ def test_document_plan_groups_exporters_and_reconciles_shared_costs(api):
     single_working = client.get(f"/nfe-drafts/{drafts[0]['id']}/unnumbered-xml/download", headers=headers)
     assert single_working.status_code == 200
     assert b"SEM VALOR FISCAL" in single_working.data
+    working_preview = client.get(f"/nfe-drafts/{drafts[0]['id']}/unnumbered-xml/danfe-preview", headers=headers)
+    assert working_preview.status_code == 200, working_preview.get_json() if working_preview.is_json else None
+    assert working_preview.data.startswith(b"%PDF-")
+    assert "SEM-NUMERO" in working_preview.headers["Content-Disposition"]
     with client.application.app_context():
         from app.models import NfeXmlVersion, NfeNumberSequence
         assert NfeXmlVersion.query.count() == 0
