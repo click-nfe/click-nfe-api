@@ -1041,8 +1041,6 @@ class ImportNfeService:
 
         if fiscal_profile is None:
             next_action = "configure_fiscal_profile"
-        elif sequence is None and latest_snapshot is None:
-            next_action = "configure_number_sequence"
         elif not has_provider_connection and latest_snapshot is None:
             next_action = "configure_provider_connection"
         elif latest_snapshot is None:
@@ -1068,12 +1066,12 @@ class ImportNfeService:
             next_action = "create_child_drafts"
         elif is_multi_document_plan and child_correction_required:
             next_action = "correct_child_drafts"
-        elif is_multi_document_plan and sequence is None:
-            next_action = "configure_number_sequence"
         elif is_multi_document_plan and missing_child_xmls:
             next_action = "generate_child_xmls"
         elif is_multi_document_plan and invalid_child_xmls:
             next_action = "validate_child_xmls"
+        elif is_multi_document_plan and sequence is None:
+            next_action = "configure_number_sequence"
         elif is_multi_document_plan:
             next_action = "completed"
         elif latest_draft is None:
@@ -4523,6 +4521,24 @@ class ImportNfeService:
 
         db.session.flush()
         return row
+
+    def build_unnumbered_diagnostic_xml(self, draft: NfeDraft) -> str:
+        """Read-only working copy; never reserve a number or record an XML version."""
+        draft = self.get_nfe_draft_or_404(draft.id)
+        self._assert_draft_editable(draft)
+        if draft.number or draft.access_key:
+            raise ValueError("Esta nota já possui numeração. Baixe a versão fiscal na etapa 7.")
+        fiscal_payload = deepcopy(draft.fiscal_payload or {})
+        validation = self.validate_nfe_payload(fiscal_payload)
+        if not validation.is_valid:
+            raise ValueError("Rascunho fiscal inválido. Corrija os erros antes de baixar o XML de trabalho.")
+        issuer_state = ((fiscal_payload.get("issuer") or {}).get("address") or {}).get("state")
+        document = fiscal_payload.setdefault("document", {})
+        document["state_code"] = NfeAccessKeyService().get_uf_code(str(issuer_state or "").upper())
+        document["issue_datetime"] = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(microsecond=0).isoformat()
+        document.pop("number", None)
+        document.pop("access_key", None)
+        return self.xml_builder.build_unnumbered(fiscal_payload)
 
     def validate_xml_version(
         self,

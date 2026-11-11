@@ -492,6 +492,41 @@ def generate_process_nfe_child_xmls(process_id: str):
         return bad_request_response(exc)
 
 
+@import_process_bp.get("/<process_id>/nfe-document-plan/xmls/unnumbered-download")
+@auth_required
+def download_process_unnumbered_xmls(process_id: str):
+    service = _service()
+    process = service.import_process_query_for_current_user().filter_by(id=uuid_or_404(process_id)).first_or_404()
+    state = service.get_document_plan_state(process, request.args.get("duimp_snapshot_id"))
+    plan = state.get("plan")
+    if not plan or not plan["documents"]:
+        return bad_request_response(ValueError("Plano de notas ativo não encontrado."))
+
+    buffer = BytesIO()
+    try:
+        with ZipFile(buffer, "w", ZIP_DEFLATED) as archive:
+            for document in plan["documents"]:
+                summary = document.get("draft") or {}
+                if not summary.get("id"):
+                    raise ValueError("Gere todos os rascunhos antes de baixar o pacote de XMLs de trabalho.")
+                draft = service.get_nfe_draft_or_404(uuid_or_404(summary["id"]))
+                if draft.import_process_id != process.id or str(draft.planned_document_id) != document["id"]:
+                    raise ValueError("Rascunho não pertence ao plano de notas selecionado.")
+                xml = service.build_unnumbered_diagnostic_xml(draft)
+                archive.writestr(f"RASCUNHO-SEM-NUMERO-NFe-filha-{document['ordinal']}.xml", xml)
+    except ValueError as exc:
+        return bad_request_response(exc)
+
+    return Response(
+        buffer.getvalue(),
+        content_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="RASCUNHOS-SEM-NUMERO-{process.id}.zip"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
 @import_process_bp.get("/<process_id>/nfe-document-plan/xmls/download")
 @auth_required
 def download_process_nfe_child_xmls(process_id: str):
