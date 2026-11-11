@@ -289,6 +289,33 @@ def test_portal_product_column_is_initial_editable_nfe_code():
     assert item["product_code"] == "204"
 
 
+def test_part_number_comes_from_catalog_internal_code_without_replacing_product_code():
+    payload = portal_payload()
+    payload["itens"][0]["produto"]["codigo"] = "33"
+    payload["itens"][0]["produto"]["catalogo"] = {
+        "codigosInterno": [{"codigo": "13560 - SAKE HAKUSHIKA TOKUSEN JUNMAI"}]
+    }
+
+    item = DuimpNormalizer().normalize(payload)["items"][0]
+
+    assert item["product_code"] == "33"
+    assert item["part_number"] == "13560 - SAKE HAKUSHIKA TOKUSEN JUNMAI"
+    assert item["part_numbers"] == ["13560 - SAKE HAKUSHIKA TOKUSEN JUNMAI"]
+
+
+def test_multiple_catalog_internal_codes_remain_visible_but_not_auto_selected():
+    payload = portal_payload()
+    payload["itens"][0]["produto"]["catalogo"] = {
+        "codigosInternos": ["13560", {"codigoInterno": "13561"}]
+    }
+
+    item = DuimpNormalizer().normalize(payload)["items"][0]
+
+    assert item["part_number"] is None
+    assert item["catalog_internal_code"] is None
+    assert item["part_numbers"] == ["13560", "13561"]
+
+
 def test_afrmm_and_tum_come_from_item_merchandise_when_cargo_reference_is_empty():
     payload = portal_payload()
     payload["dadosGerais"]["carga"]["multiplosConhecimentosCarga"]["cargasReferenciadas"] = None
