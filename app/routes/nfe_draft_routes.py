@@ -21,7 +21,9 @@ from ..services.fiscal_certificate import (
 )
 from ..services.import_process import ImportNfeService
 from ..services.nfe_xml_signer import NfeXmlSignatureError, NfeXmlSigner
-from ..services.nfe_danfe_preview import DanfePreviewError, render_danfe_preview
+from ..services.nfe_danfe_preview import (
+    DanfePreviewError, render_danfe_preview, render_unnumbered_danfe_preview,
+)
 from ..services.nfe_danfe import DanfeError, render_authorized_danfe
 from ..services.nfe_sefaz import SefazClient, SefazConfigurationError, SefazTransportError
 from ..services.nfe_sefaz_issuance import SefazIssuanceService
@@ -436,14 +438,34 @@ def download_unnumbered_diagnostic_xml(draft_id: str):
     )
 
 
+@nfe_draft_bp.get("/<draft_id>/unnumbered-xml/danfe-preview")
+@auth_required
+def download_unnumbered_danfe_preview(draft_id: str):
+    service = _service()
+    draft = service.get_nfe_draft_or_404(uuid_or_404(draft_id))
+    try:
+        xml = service.build_unnumbered_diagnostic_xml(draft)
+        pdf = render_unnumbered_danfe_preview(xml)
+    except (ValueError, DanfePreviewError) as exc:
+        return bad_request_response(exc)
+    return Response(
+        pdf,
+        content_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="Previa-DANFE-SEM-NUMERO-{draft.id}.pdf"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
 @nfe_draft_bp.get("/<draft_id>/xml-versions/<xml_version_id>/danfe-preview")
 @auth_required
 def download_danfe_preview(draft_id: str, xml_version_id: str):
     _, _, xml_version = _draft_and_xml_version(draft_id, xml_version_id)
     xml_type = getattr(xml_version.xml_type, "value", xml_version.xml_type)
-    if str(xml_type).lower() != "signed" or xml_version.xsd_valid is not True:
+    if str(xml_type).lower() not in {"signed", "unsigned"} or xml_version.xsd_valid is not True:
         return bad_request_response(
-            ValueError("A prévia em PDF exige um XML assinado e válido no XSD.")
+            ValueError("A prévia em PDF exige um XML válido no XSD.")
         )
     try:
         pdf = render_danfe_preview(xml_version.xml_content)
