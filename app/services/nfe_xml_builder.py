@@ -17,18 +17,27 @@ class NfeXmlBuilder:
     NS = "http://www.portalfiscal.inf.br/nfe"
 
     def build(self, payload: dict[str, Any], *, access_key: str) -> str:
-        if len(str(access_key)) != 44 or not str(access_key).isdigit():
+        return self._build(payload, access_key=access_key)
+
+    def build_unnumbered(self, payload: dict[str, Any]) -> str:
+        """Diagnostic XML for review; deliberately cannot pass NF-e XSD."""
+        return self._build(payload, access_key=None)
+
+    def _build(self, payload: dict[str, Any], *, access_key: str | None) -> str:
+        if access_key is not None and (len(str(access_key)) != 44 or not str(access_key).isdigit()):
             raise NfeXmlBuildError("A chave de acesso deve conter 44 dígitos.")
 
         ET.register_namespace("", self.NS)
         nfe = ET.Element(self._tag("NFe"))
+        if access_key is None:
+            nfe.append(ET.Comment("RASCUNHO SEM NUMERO OU CHAVE - SEM VALOR FISCAL - NAO ASSINAR OU TRANSMITIR"))
         inf_nfe = ET.SubElement(
             nfe,
             self._tag("infNFe"),
-            {"Id": f"NFe{access_key}", "versao": "4.00"},
+            ({"Id": f"NFe{access_key}", "versao": "4.00"} if access_key else {"versao": "4.00"}),
         )
 
-        self._build_ide(inf_nfe, payload)
+        self._build_ide(inf_nfe, payload, numbered=access_key is not None)
         self._build_issuer(inf_nfe, payload.get("issuer") or {})
         self._build_recipient(inf_nfe, payload.get("recipient") or {})
         for item in payload.get("items") or []:
@@ -45,17 +54,16 @@ class NfeXmlBuilder:
             short_empty_elements=True,
         ).decode("utf-8")
 
-    def _build_ide(self, parent: ET.Element, payload: dict[str, Any]) -> None:
+    def _build_ide(self, parent: ET.Element, payload: dict[str, Any], *, numbered: bool = True) -> None:
         document = payload.get("document") or {}
         issuer_address = (payload.get("issuer") or {}).get("address") or {}
         required = {
             "state_code": document.get("state_code"),
-            "cnf": document.get("cnf"),
-            "number": document.get("number"),
             "issue_datetime": document.get("issue_datetime"),
-            "check_digit": document.get("check_digit"),
             "city_code": issuer_address.get("city_code"),
         }
+        if numbered:
+            required.update(cnf=document.get("cnf"), number=document.get("number"), check_digit=document.get("check_digit"))
         missing = [name for name, value in required.items() if value in (None, "")]
         if missing:
             raise NfeXmlBuildError(
@@ -64,11 +72,13 @@ class NfeXmlBuilder:
 
         ide = ET.SubElement(parent, self._tag("ide"))
         self._text(ide, "cUF", document["state_code"])
-        self._text(ide, "cNF", document["cnf"])
+        if numbered:
+            self._text(ide, "cNF", document["cnf"])
         self._text(ide, "natOp", document.get("operation_nature") or "Importação de mercadoria")
         self._text(ide, "mod", "55")
         self._text(ide, "serie", str(document["series"]).lstrip("0") or "0")
-        self._text(ide, "nNF", document["number"])
+        if numbered:
+            self._text(ide, "nNF", document["number"])
         self._text(ide, "dhEmi", self._datetime(document["issue_datetime"]))
         if document.get("exit_entry_datetime"):
             self._text(
@@ -81,7 +91,8 @@ class NfeXmlBuilder:
         self._text(ide, "cMunFG", issuer_address["city_code"])
         self._text(ide, "tpImp", document.get("print_type") or "1")
         self._text(ide, "tpEmis", document.get("tp_emis") or "1")
-        self._text(ide, "cDV", document["check_digit"])
+        if numbered:
+            self._text(ide, "cDV", document["check_digit"])
         self._text(ide, "tpAmb", "1" if document.get("environment") == "production" else "2")
         self._text(ide, "finNFe", "1")
         self._text(ide, "indFinal", document.get("final_consumer") or "0")

@@ -417,6 +417,25 @@ def download_nfe_xml_version(draft_id: str, xml_version_id: str):
     )
 
 
+@nfe_draft_bp.get("/<draft_id>/unnumbered-xml/download")
+@auth_required
+def download_unnumbered_diagnostic_xml(draft_id: str):
+    service = _service()
+    draft = service.get_nfe_draft_or_404(uuid_or_404(draft_id))
+    try:
+        xml = service.build_unnumbered_diagnostic_xml(draft)
+    except ValueError as exc:
+        return bad_request_response(exc)
+    return Response(
+        xml,
+        content_type="application/xml; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="RASCUNHO-SEM-NUMERO-{draft.id}.xml"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
 @nfe_draft_bp.get("/<draft_id>/xml-versions/<xml_version_id>/danfe-preview")
 @auth_required
 def download_danfe_preview(draft_id: str, xml_version_id: str):

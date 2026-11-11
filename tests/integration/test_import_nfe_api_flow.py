@@ -1,6 +1,9 @@
 from datetime import datetime, timedelta
+from io import BytesIO
 from types import SimpleNamespace
 from uuid import UUID
+from xml.etree import ElementTree as ET
+from zipfile import ZipFile
 
 import jwt
 import pytest
@@ -646,7 +649,7 @@ def test_missing_tax_rule_does_not_block_duimp_preparation(api):
     assert workflow.status_code == 200
     body = workflow.get_json()
     assert body["prerequisites"]["has_active_tax_rule"] is False
-    assert body["next_action"] == "configure_number_sequence"
+    assert body["next_action"] == "configure_provider_connection"
 
 
 def test_context_refresh_creates_versioned_snapshot_and_reuses_official_cache(
@@ -898,6 +901,7 @@ def test_api_uses_client_tax_rule_and_persisted_nfe_context(api):
                 "itens": [
                     {
                         "numeroItem": "1",
+                        "sequenciaAdicao": "1",
                         "codigoProduto": "PROD-001",
                         "descricao": "Produto automatizado para revenda",
                         "ncm": "87087090",
@@ -915,6 +919,7 @@ def test_api_uses_client_tax_rule_and_persisted_nfe_context(api):
                     },
                     {
                         "numeroItem": "2",
+                        "sequenciaAdicao": "2",
                         "codigoProduto": "PROD-002",
                         "descricao": "Produto automatizado para uso e consumo",
                         "ncm": "84212300",
@@ -994,7 +999,7 @@ def test_api_uses_client_tax_rule_and_persisted_nfe_context(api):
     )
     assert draft_response.status_code == 201, draft_response.get_json()
     body = draft_response.get_json()
-    assert body["validation"]["valid"] is True
+    assert body["validation"]["valid"] is True, body["validation"]
     assert body["tax_rule"]["id"] == rule_id
     fiscal_payload = body["draft"]["fiscal_payload"]
     assert fiscal_payload["document"]["operation_nature"] == (
@@ -1426,6 +1431,7 @@ def test_document_plan_groups_exporters_and_reconciles_shared_costs(api):
     raw_items = [
         {
             "numeroItem": "1",
+            "sequenciaAdicao": "1",
             "codigoProduto": "A-REV",
             "descricao": "Produto Alpha para revenda",
             "ncm": "87087090",
@@ -1438,6 +1444,7 @@ def test_document_plan_groups_exporters_and_reconciles_shared_costs(api):
         },
         {
             "numeroItem": "2",
+            "sequenciaAdicao": "2",
             "codigoProduto": "A-USO",
             "descricao": "Produto Alpha para uso",
             "ncm": "84212300",
@@ -1450,6 +1457,7 @@ def test_document_plan_groups_exporters_and_reconciles_shared_costs(api):
         },
         {
             "numeroItem": "3",
+            "sequenciaAdicao": "3",
             "codigoProduto": "B-REV",
             "descricao": "Produto Beta para revenda",
             "ncm": "87087090",
@@ -1609,6 +1617,30 @@ def test_document_plan_groups_exporters_and_reconciles_shared_costs(api):
     ).get_json()["items"]
     assert len(drafts) == 2
     assert {draft["items_count"] for draft in drafts} == {1, 2}
+
+    working_bundle = client.get(
+        f"/import-processes/{process_id}/nfe-document-plan/xmls/unnumbered-download",
+        headers=headers,
+        query_string={"duimp_snapshot_id": snapshot_id},
+    )
+    assert working_bundle.status_code == 200, working_bundle.get_json()
+    with ZipFile(BytesIO(working_bundle.data)) as archive:
+        assert len(archive.namelist()) == 2
+        for filename in archive.namelist():
+            xml = archive.read(filename).decode("utf-8")
+            root = ET.fromstring(xml)
+            assert "RASCUNHO-SEM-NUMERO" in filename
+            assert "Id" not in root.find("{http://www.portalfiscal.inf.br/nfe}infNFe").attrib
+            assert root.find(".//{http://www.portalfiscal.inf.br/nfe}nNF") is None
+            assert root.find(".//{http://www.portalfiscal.inf.br/nfe}cProd") is not None
+    single_working = client.get(f"/nfe-drafts/{drafts[0]['id']}/unnumbered-xml/download", headers=headers)
+    assert single_working.status_code == 200
+    assert b"SEM VALOR FISCAL" in single_working.data
+    with client.application.app_context():
+        from app.models import NfeXmlVersion, NfeNumberSequence
+        assert NfeXmlVersion.query.count() == 0
+        assert NfeNumberSequence.query.count() == 0
+        assert all(db.session.get(NfeDraft, UUID(row["id"])).number is None for row in drafts)
 
     sequence = client.put(
         f"/clients/{importer_id}/nfe-number-sequences",

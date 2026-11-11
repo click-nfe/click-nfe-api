@@ -137,6 +137,23 @@ def test_builds_unsigned_import_nfe_with_foreign_recipient_and_duimp():
     assert root.find(".//{http://www.w3.org/2000/09/xmldsig#}Signature") is None
 
 
+def test_unnumbered_working_xml_preserves_items_but_cannot_pass_nfe_xsd():
+    data = payload()
+    for field in ("number", "cnf", "check_digit"):
+        del data["document"][field]
+    xml = NfeXmlBuilder().build_unnumbered(data)
+    root = ET.fromstring(xml)
+    inf_nfe = root.find("nfe:infNFe", NS)
+    assert "Id" not in inf_nfe.attrib
+    assert root.find(".//nfe:ide/nfe:nNF", NS) is None
+    assert root.find(".//nfe:ide/nfe:cNF", NS) is None
+    assert root.find(".//nfe:ide/nfe:cDV", NS) is None
+    assert root.findtext(".//nfe:prod/nfe:cProd", namespaces=NS) == "PROD-001"
+    assert root.findtext(".//nfe:DI/nfe:nDI", namespaces=NS) == "26BR00000000001"
+    assert "SEM VALOR FISCAL" in xml
+    assert NfeXsdValidator().validate(xml, allow_unsigned=True).is_valid is False
+
+
 
 def test_builds_xsd_valid_icms00_group():
     data = payload()
