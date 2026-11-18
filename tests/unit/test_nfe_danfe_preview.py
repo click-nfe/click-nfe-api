@@ -12,6 +12,26 @@ from app.services.nfe_xml_builder import NfeXmlBuilder
 from tests.unit.test_nfe_xml_builder import payload
 
 
+def test_preview_shows_import_taxes_in_the_top_summary():
+    data = payload()
+    xml = NfeXmlBuilder().build(
+        data, access_key="41260700000000000191550010000144221763362375",
+    )
+    from app.services.nfe_danfe_preview import render_danfe_preview
+
+    for preview in (
+        render_danfe_preview(xml),
+        render_unnumbered_danfe_preview(NfeXmlBuilder().build_unnumbered(data)),
+    ):
+        text = "\n".join(page.extract_text() for page in PdfReader(BytesIO(preview)).pages)
+        assert "IMPOSTO DE IMPORTAÇÃO (II)" in text
+        assert "VALOR DO PIS" in text
+        assert "VALOR DA COFINS" in text
+        assert "1.089,79" in text
+        assert "188,90" in text
+        assert "870,02" in text
+
+
 def test_standard_preview_does_not_print_temporary_fiscal_identifiers():
     data = payload()
     for field in ("number", "cnf", "check_digit"):
