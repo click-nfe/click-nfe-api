@@ -3164,6 +3164,44 @@ class ImportNfeService:
         if supplier is None and isinstance(duimp.get("foreign_supplier"), dict):
             supplier = duimp["foreign_supplier"]
 
+        # O contexto fiscal resolve o país BACEN depois da captura da DUIMP.
+        # Itens ainda carregam o exportador bruto: complete somente o mesmo
+        # exportador, para não atribuir o país de outra NF-e filha.
+        candidates = suppliers[:]
+        resolved_supplier = duimp.get("foreign_supplier")
+        if isinstance(resolved_supplier, dict):
+            candidates.append(resolved_supplier)
+        for candidate in candidates:
+            candidate_code = self._empty_to_none(
+                candidate.get("code") or candidate.get("codigo")
+            )
+            candidate_id = self._empty_to_none(
+                candidate.get("foreign_tax_id") or candidate.get("foreign_id")
+            )
+            candidate_name = self._empty_to_none(
+                candidate.get("name") or candidate.get("legal_name")
+            )
+            current = supplier or {}
+            current_id = self._empty_to_none(
+                current.get("foreign_tax_id") or current.get("foreign_id")
+            )
+            current_name = self._empty_to_none(
+                current.get("name") or current.get("legal_name")
+            )
+            if exporter_code and candidate_code:
+                matches = exporter_code == candidate_code
+            elif current_id and candidate_id:
+                matches = current_id == candidate_id
+            elif current_name and candidate_name:
+                matches = current_name.casefold() == candidate_name.casefold()
+            else:
+                matches = False
+            if matches:
+                supplier = self._merge_defaults(current, {
+                    key: value for key, value in candidate.items()
+                    if value not in (None, "") and current.get(key) in (None, "")
+                })
+
         foreign_id = self._empty_to_none(
             (supplier or {}).get("foreign_tax_id")
             or (supplier or {}).get("foreign_id")
@@ -3559,17 +3597,24 @@ class ImportNfeService:
                 raise ValueError(
                     "A NF-e filha não pertence ao plano ativo deste processo."
                 )
+            # Planos anteriores à resolução do país também precisam herdar
+            # o contexto fiscal ao gerar novamente o rascunho.
+            _, _, planned_supplier = self._document_exporter(
+                {
+                    "exporter_code": planned_document.exporter_code,
+                    "exporter": planned_document.foreign_supplier,
+                },
+                normalized,
+            )
             normalized = deepcopy(normalized)
             normalized["items"] = [
                 deepcopy(item.raw_source_payload or {})
                 for item in planned_document.items
             ]
-            normalized["foreign_supplier"] = deepcopy(
-                planned_document.foreign_supplier
-            )
+            normalized["foreign_supplier"] = deepcopy(planned_supplier)
             normalized["foreign_suppliers"] = [
-                deepcopy(planned_document.foreign_supplier)
-            ] if planned_document.foreign_supplier else []
+                deepcopy(planned_supplier)
+            ] if planned_supplier else []
             normalized["exporter_code"] = planned_document.exporter_code
             normalized["afrmm_value"] = (
                 planned_document.allocated_shared_costs or {}
@@ -3590,7 +3635,7 @@ class ImportNfeService:
                 or payload.get("import_purpose")
             )
             payload["foreign_supplier"] = self._merge_defaults(
-                planned_document.foreign_supplier,
+                planned_supplier,
                 payload.get("foreign_supplier"),
             )
             payload["additional_costs"] = deepcopy(
