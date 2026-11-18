@@ -6,6 +6,10 @@ import re
 from io import BytesIO
 
 from brazilfiscalreport.danfe import Danfe, DanfeConfig, FooterStamp
+from brazilfiscalreport.danfe.danfe_block import DanfeBlock
+from brazilfiscalreport.danfe.danfe_conf import DEFAULT_FIELD_HEIGHT
+from brazilfiscalreport.danfe.models import BaseFieldInfo
+from brazilfiscalreport.utils import format_number
 from lxml import etree
 
 
@@ -17,11 +21,31 @@ class DanfePreviewError(ValueError):
     """The XML cannot be presented as a fiscal-document preview."""
 
 
+class _ImportTaxPreview(Danfe):
+    """Add import taxes to the preview's tax summary without changing the XML."""
+
+    def _draw_taxes(self):
+        super()._draw_taxes()
+        totals = self.totais.find(N + "ICMSTot") if self.totais is not None else None
+        row = DanfeBlock(pdf=self, rows_heights=(DEFAULT_FIELD_HEIGHT,))
+        row.add_fields([[
+            BaseFieldInfo(w=0, description=label, content=format_number(
+                _value(totals, N + tag) or "0", precision=2,
+            ), type="number")
+            for label, tag in (
+                ("IMPOSTO DE IMPORTAÇÃO (II)", "vII"),
+                ("VALOR DO PIS", "vPIS"),
+                ("VALOR DA COFINS", "vCOFINS"),
+            )
+        ]])
+        row.render()
+
+
 def _value(node, path: str) -> str:
     return (node.findtext(path) or "").strip() if node is not None else ""
 
 
-class _UnnumberedDanfe(Danfe):
+class _UnnumberedDanfe(_ImportTaxPreview):
     """Keep the standard layout while suppressing the renderer's temporary key/number.
 
     BrazilFiscalReport requires both fields to lay out the page. They exist only
@@ -138,6 +162,6 @@ def render_danfe_preview(xml_content: str) -> bytes:
     # An additional footer makes the non-transmitted state explicit in print.
     try:
         sanitized_xml = etree.tostring(root, encoding="utf-8")
-        return bytes(Danfe(xml=sanitized_xml, config=_preview_config()).output())
+        return bytes(_ImportTaxPreview(xml=sanitized_xml, config=_preview_config()).output())
     except (ValueError, KeyError, TypeError, AttributeError, IndexError) as exc:
         raise DanfePreviewError("O leiaute da prévia não pôde ser gerado a partir do XML.") from exc
