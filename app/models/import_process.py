@@ -395,6 +395,9 @@ class NfeDocumentPlan(Base):
         nullable=False,
         default="customs_value",
     )
+    include_international_costs_in_product = Column(
+        Boolean, nullable=False, default=True
+    )
     shared_costs = Column(JSON, nullable=False)
     totals = Column(JSON, nullable=False)
     reconciliation = Column(JSON, nullable=False)

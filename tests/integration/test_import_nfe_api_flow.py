@@ -1445,6 +1445,8 @@ def test_document_plan_groups_exporters_and_reconciles_shared_costs(api):
             "unidade": "UN",
             "valorProduto": "300.00",
             "valorAduaneiro": "300.00",
+            "valorFrete": "30.00",
+            "valorSeguro": "5.00",
             "codigoExportador": "EXP-A",
             "exporter": exporter_a,
         },
@@ -1541,6 +1543,7 @@ def test_document_plan_groups_exporters_and_reconciles_shared_costs(api):
     assert created.status_code == 201, created.get_json()
     plan = created.get_json()
     assert plan["allocation_basis"] == "customs_value"
+    assert plan["include_international_costs_in_product"] is True
     assert plan["totals"] == {
         "documents_count": 2,
         "items_count": 3,
@@ -1571,6 +1574,7 @@ def test_document_plan_groups_exporters_and_reconciles_shared_costs(api):
     )
     assert fetched.status_code == 200
     assert fetched.get_json()["plan"]["id"] == plan["id"]
+    assert fetched.get_json()["plan"]["include_international_costs_in_product"] is True
 
     workflow = client.get(
         f"/import-processes/{process_id}/nfe-workflow-state",
@@ -1639,6 +1643,16 @@ def test_document_plan_groups_exporters_and_reconciles_shared_costs(api):
             assert "Id" not in root.find("{http://www.portalfiscal.inf.br/nfe}infNFe").attrib
             assert root.find(".//{http://www.portalfiscal.inf.br/nfe}nNF") is None
             assert root.find(".//{http://www.portalfiscal.inf.br/nfe}cProd") is not None
+            if root.findtext(".//{http://www.portalfiscal.inf.br/nfe}cProd") == "A-REV":
+                ns = {"nfe": "http://www.portalfiscal.inf.br/nfe"}
+                item = next(
+                    row for row in root.findall(".//nfe:det/nfe:prod", ns)
+                    if row.findtext("nfe:cProd", namespaces=ns) == "A-REV"
+                )
+                assert item.findtext("nfe:vProd", namespaces=ns) == "335.00"
+                assert item.find("nfe:vFrete", ns) is None
+                assert item.find("nfe:vSeg", ns) is None
+                assert root.findtext(".//nfe:ICMSTot/nfe:vFrete", namespaces=ns) == "0.00"
     single_working = client.get(f"/nfe-drafts/{drafts[0]['id']}/unnumbered-xml/download", headers=headers)
     assert single_working.status_code == 200
     assert b"SEM VALOR FISCAL" in single_working.data
@@ -1710,6 +1724,43 @@ def test_document_plan_groups_exporters_and_reconciles_shared_costs(api):
     )
     assert legacy_draft.status_code == 400
     assert "múltiplos exportadores" in legacy_draft.get_json()["message"]
+
+    separate = client.post(
+        f"/import-processes/{process_id}/nfe-document-plan",
+        headers=headers,
+        json={
+            "duimp_snapshot_id": snapshot_id,
+            "include_international_costs_in_product": False,
+            "additional_costs": {"other": "0.07"},
+        },
+    )
+    assert separate.status_code == 201, separate.get_json()
+    assert separate.get_json()["include_international_costs_in_product"] is False
+    regenerated = client.post(
+        f"/import-processes/{process_id}/nfe-document-plan/generate-drafts",
+        headers=headers,
+        json={"duimp_snapshot_id": snapshot_id, "environment": "production", "series": "1"},
+    )
+    assert regenerated.status_code == 201, regenerated.get_json()
+    assert len(regenerated.get_json()["created_draft_ids"]) == 2
+    separate_bundle = client.get(
+        f"/import-processes/{process_id}/nfe-document-plan/xmls/unnumbered-download",
+        headers=headers,
+        query_string={"duimp_snapshot_id": snapshot_id},
+    )
+    assert separate_bundle.status_code == 200
+    ns = {"nfe": "http://www.portalfiscal.inf.br/nfe"}
+    with ZipFile(BytesIO(separate_bundle.data)) as archive:
+        products = [
+            item for name in archive.namelist()
+            for item in ET.fromstring(archive.read(name)).findall(".//nfe:det/nfe:prod", ns)
+        ]
+        separated_product = next(
+            row for row in products if row.findtext("nfe:cProd", namespaces=ns) == "A-REV"
+        )
+        assert separated_product.findtext("nfe:vProd", namespaces=ns) == "300.00"
+        assert separated_product.findtext("nfe:vFrete", namespaces=ns) == "30.00"
+        assert separated_product.findtext("nfe:vSeg", namespaces=ns) == "5.00"
 
 
 def test_provider_connection_post_reactivates_existing_scope(api):
