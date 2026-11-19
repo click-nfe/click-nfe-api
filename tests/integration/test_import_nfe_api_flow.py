@@ -11,7 +11,7 @@ import pytest
 from app import create_app
 from app.extensions import db
 from app.models import Client, DuimpSnapshot, NfeDraft, Organization, User
-from app.integrations.portal_unico import PortalUnicoApiError, PortalUnicoServiceUnavailableError
+from app.integrations.portal_unico import PortalUnicoApiError, PortalUnicoImporterRepresentationError, PortalUnicoServiceUnavailableError
 from app.models.import_process import ExternalApiRequestLog, ImportProcess, ImportProcessStatus
 from app.services.import_process import ImportNfeService
 from app.models.nfe_issuance import (
@@ -114,6 +114,7 @@ def test_sefaz_production_catalog_resolves_all_states_without_env_configuration(
         (PortalUnicoApiError("Versão indisponível", status_code=422, error_code="DUIMP_VERSION"), 502, "DUIMP_VERSION"),
         (PortalUnicoServiceUnavailableError("Portal em manutenção"), 503, "PortalUnicoServiceUnavailableError"),
         (RuntimeError("normalização falhou"), 500, "RuntimeError"),
+        (PortalUnicoImporterRepresentationError("O usuário não representa o importador informado", status_code=403, error_code="DIMP-ER0002"), 422, "DIMP-ER0002"),
     ],
 )
 def test_duimp_fetch_failure_retains_diagnostic_after_rollback(
@@ -148,6 +149,9 @@ def test_duimp_fetch_failure_retains_diagnostic_after_rollback(
     reference = result.get_json()["reference"]
     assert len(reference) == 16
     assert str(failure) not in result.get_json()["message"]
+    if error_code == "DIMP-ER0002":
+        assert result.get_json()["error"] == "portal_unico_importer_access_denied"
+        assert "credencial" in result.get_json()["message"]
     with client.application.app_context():
         process = db.session.get(ImportProcess, UUID(process_id))
         assert process.status == ImportProcessStatus.DUIMP_FETCH_FAILED.value

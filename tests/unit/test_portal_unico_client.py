@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from io import BytesIO
 from dataclasses import dataclass
 from typing import Any, Mapping
+from urllib.error import HTTPError
 
 import pytest
 from cryptography.fernet import Fernet
@@ -12,9 +14,11 @@ from app.integrations.portal_unico import (
     GcpSecretManagerPortalCredentialResolver,
     LocalEncryptedFilePortalCredentialStore,
     PortalUnicoIntegrationError,
+    PortalUnicoImporterRepresentationError,
     PortalUnicoCredentials,
     PortalUnicoDuimpGateway,
     PortalUnicoResponse,
+    UrllibJsonTransport,
 )
 
 
@@ -71,6 +75,24 @@ def response(payload: Any, csrf: str | None = None, **headers: str):
     if csrf:
         headers["X-CSRF-Token"] = csrf
     return PortalUnicoResponse(200, headers, payload)
+
+
+def test_transport_identifies_importer_representation_denial_in_nested_error(monkeypatch):
+    body = b'{"erros":[{"mensagem":"O usuario nao representa o importador informado. DIMP-ER0002"}]}'
+
+    def reject(_request, *, timeout):
+        raise HTTPError(
+            "https://portalunico.siscomex.gov.br/duimp-api/api/ext/duimp/teste",
+            403, "Forbidden", {}, BytesIO(body),
+        )
+
+    monkeypatch.setattr("app.integrations.portal_unico.client.urlopen", reject)
+    with pytest.raises(PortalUnicoImporterRepresentationError) as caught:
+        UrllibJsonTransport().request(
+            "GET", "https://portalunico.siscomex.gov.br/duimp-api/api/ext/duimp/teste"
+        )
+    assert caught.value.status_code == 403
+    assert caught.value.error_code == "DIMP-ER0002"
 
 
 @pytest.mark.parametrize(

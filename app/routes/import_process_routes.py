@@ -9,6 +9,7 @@ from marshmallow import ValidationError
 from ..auth import ADMIN_ROLE, auth_required
 from ..extensions import db
 from ..integrations.portal_unico import (
+    PortalUnicoImporterRepresentationError,
     PortalUnicoIntegrationError,
     PortalUnicoServiceUnavailableError,
     portal_credential_resolver_from_config,
@@ -620,6 +621,17 @@ def fetch_process_duimp(process_id: str):
             "message": "Serviço Indisponível. Consulte a disponibilidade do Portal Único e tente novamente mais tarde.",
             "reference": reference,
         }), 503
+    except PortalUnicoImporterRepresentationError as exc:
+        _record_duimp_fetch_failure(service, process_uuid, payload, exc, started_at, reference)
+        return jsonify({
+            "error": "portal_unico_importer_access_denied",
+            "message": (
+                "A credencial do Portal Único usada nesta consulta não representa o "
+                "importador da DUIMP. Configure uma credencial com acesso a esse "
+                "importador ou regularize a representação no Portal Único e tente novamente."
+            ),
+            "reference": reference,
+        }), 422
     except PortalUnicoIntegrationError as exc:
         _record_duimp_fetch_failure(service, process_uuid, payload, exc, started_at, reference)
         return jsonify({
