@@ -2934,6 +2934,9 @@ class ImportNfeService:
             version_number=latest_version + 1,
             status="planned",
             allocation_basis="customs_value",
+            include_international_costs_in_product=payload[
+                "include_international_costs_in_product"
+            ],
             shared_costs=shared_costs,
             totals={},
             reconciliation={},
@@ -3271,6 +3274,7 @@ class ImportNfeService:
             "version_number": plan.version_number,
             "status": plan.status,
             "allocation_basis": plan.allocation_basis,
+            "include_international_costs_in_product": plan.include_international_costs_in_product,
             "shared_costs": plan.shared_costs or {},
             "totals": plan.totals or {},
             "reconciliation": plan.reconciliation or {},
@@ -3643,7 +3647,12 @@ class ImportNfeService:
             )
             payload["document"] = self._merge_defaults(
                 payload.get("document"),
-                {"operation_nature": planned_document.operation_nature},
+                {
+                    "operation_nature": planned_document.operation_nature,
+                    "include_international_costs_in_product": (
+                        planned_document.document_plan.include_international_costs_in_product
+                    ),
+                },
             )
             preallocated_costs = {
                 item.duimp_item_number: deepcopy(
@@ -4999,6 +5008,9 @@ class ImportNfeService:
                 configuration=tax_configuration,
                 additional_costs=resolved_additional_costs,
             )
+        if document_options.get("include_international_costs_in_product", False):
+            items = self._include_international_costs_in_product(items)
+            totals = self.calculate_nfe_totals(items)
         expected_tax_totals = deepcopy(duimp.get("tax_totals") or {})
         icms_reference = (
             (duimp.get("automation_fiscal_references") or {}).get("icms") or {}
@@ -5052,9 +5064,22 @@ class ImportNfeService:
             transport,
             items,
         )
+        summary_totals = dict(totals)
+        if document_options.get("include_international_costs_in_product", False):
+            for field in ("freight_value", "insurance_value"):
+                summary_totals[field] = self._money_text(sum(
+                    (
+                        self._decimal(
+                            ((item.get("import_payload") or {}).get(
+                                "international_costs_in_product"
+                            ) or {}).get(field, item.get(field))
+                        )
+                        for item in items),
+                    Decimal("0"),
+                ))
         resolved_additional_info = self._build_import_additional_info(
             duimp=duimp,
-            totals=totals,
+            totals=summary_totals,
             additional_costs=resolved_additional_costs,
             options=additional_info,
         )
@@ -5088,6 +5113,9 @@ class ImportNfeService:
                 "currency": "BRL",
                 "product_code_source": document_options.get("product_code_source") or "duimp",
                 "foreign_id_mode": document_options.get("foreign_id_mode") or "source",
+                "include_international_costs_in_product": document_options.get(
+                    "include_international_costs_in_product", False
+                ),
             },
             "import_process": {
                 "id": str(process.id),
@@ -5559,6 +5587,43 @@ class ImportNfeService:
 
     def calculate_nfe_totals(self, items: list[dict[str, Any]]) -> dict[str, Any]:
         return self.tax_calculator.calculate_totals(items)
+
+    def _include_international_costs_in_product(
+        self, items: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Present CIF in vProd after calculating tax bases with source values."""
+        for item in items:
+            product = self._decimal(item.get("product_value"))
+            freight = self._decimal(item.get("freight_value"))
+            insurance = self._decimal(item.get("insurance_value"))
+            if not freight and not insurance:
+                continue
+            value = (product + freight + insurance).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+            import_payload = deepcopy(item.get("import_payload") or {})
+            import_payload["international_costs_in_product"] = {
+                "original_product_value": self._money_text(product),
+                "freight_value": self._money_text(freight),
+                "insurance_value": self._money_text(insurance),
+            }
+            item["import_payload"] = import_payload
+            item["product_value"] = self._money_text(value)
+            item["freight_value"] = "0.00"
+            item["insurance_value"] = "0.00"
+            for quantity_field, unit_field in (
+                ("commercial_quantity", "commercial_unit_value"),
+                ("taxable_quantity", "taxable_unit_value"),
+            ):
+                quantity = self._decimal(item.get(quantity_field))
+                if quantity > 0:
+                    item[unit_field] = format(
+                        (value / quantity).quantize(
+                            Decimal("0.0000000001"), rounding=ROUND_HALF_UP
+                        ),
+                        ".10f",
+                    )
+        return items
 
     @staticmethod
     def _authorization_metadata(items: list[dict[str, Any]]) -> dict[str, Any]:

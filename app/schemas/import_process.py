@@ -358,6 +358,7 @@ class CreateNfeDraftFromDuimpSchema(Schema):
 class CreateNfeDocumentPlanSchema(Schema):
     duimp_snapshot_id = fields.UUID(load_default=None, allow_none=True)
     additional_costs = fields.Dict(load_default=dict)
+    include_international_costs_in_product = fields.Boolean(load_default=True)
 
     @validates_schema
     def validate_additional_costs(self, data, **kwargs):
