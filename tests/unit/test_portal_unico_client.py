@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from io import BytesIO
 from dataclasses import dataclass
 from typing import Any, Mapping
+from urllib.error import HTTPError
 
 import pytest
 from cryptography.fernet import Fernet
@@ -12,9 +14,11 @@ from app.integrations.portal_unico import (
     GcpSecretManagerPortalCredentialResolver,
     LocalEncryptedFilePortalCredentialStore,
     PortalUnicoIntegrationError,
+    PortalUnicoImporterRepresentationError,
     PortalUnicoCredentials,
     PortalUnicoDuimpGateway,
     PortalUnicoResponse,
+    UrllibJsonTransport,
 )
 
 
@@ -71,6 +75,24 @@ def response(payload: Any, csrf: str | None = None, **headers: str):
     if csrf:
         headers["X-CSRF-Token"] = csrf
     return PortalUnicoResponse(200, headers, payload)
+
+
+def test_transport_identifies_importer_representation_denial_in_nested_error(monkeypatch):
+    body = b'{"erros":[{"mensagem":"O usuario nao representa o importador informado. DIMP-ER0002"}]}'
+
+    def reject(_request, *, timeout):
+        raise HTTPError(
+            "https://portalunico.siscomex.gov.br/duimp-api/api/ext/duimp/teste",
+            403, "Forbidden", {}, BytesIO(body),
+        )
+
+    monkeypatch.setattr("app.integrations.portal_unico.client.urlopen", reject)
+    with pytest.raises(PortalUnicoImporterRepresentationError) as caught:
+        UrllibJsonTransport().request(
+            "GET", "https://portalunico.siscomex.gov.br/duimp-api/api/ext/duimp/teste"
+        )
+    assert caught.value.status_code == 403
+    assert caught.value.error_code == "DIMP-ER0002"
 
 
 @pytest.mark.parametrize(
@@ -273,6 +295,30 @@ def test_gateway_rejects_item_count_mismatch():
             duimp_number="26BR00000000001",
             enrich_catalog=False,
         )
+
+
+def test_gateway_uses_retified_current_version_and_replacement_items():
+    transport = FakeTransport([
+        response({}, **{"Set-Token": "jwt", "X-CSRF-Token": "csrf"}),
+        response({"versao": "2"}),
+        response({"quantidadeItens": 2}),
+        response([
+            {"identificacao": {"numeroItem": 2}},
+            {"identificacao": {"numeroItem": 3}},
+        ]),
+    ])
+    gateway = PortalUnicoDuimpGateway(
+        credentials=PortalUnicoCredentials("id", "secret"),
+        environment="production", transport=transport,
+    )
+
+    result = gateway.fetch_duimp(
+        duimp_number="26BR0002263407-0", enrich_catalog=False
+    )
+    assert result["versao"] == "2"
+    assert [item["identificacao"]["numeroItem"] for item in result["itens"]] == [2, 3]
+    assert transport.requests[2].url.endswith("/duimp/26BR00022634070/2")
+    assert transport.requests[3].url.endswith("/duimp/26BR00022634070/2/itens")
 
 
 def test_gateway_enriches_products_and_operators_from_catalog():

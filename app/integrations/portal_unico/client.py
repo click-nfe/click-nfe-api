@@ -37,6 +37,10 @@ class PortalUnicoApiError(PortalUnicoIntegrationError):
         self.error_code = error_code
 
 
+class PortalUnicoImporterRepresentationError(PortalUnicoApiError):
+    """A credencial da consulta não representa o importador da DUIMP."""
+
+
 class PortalUnicoServiceUnavailableError(PortalUnicoIntegrationError):
     """Manutenção oficial ou resposta 502/503/504 do Portal."""
 
@@ -635,6 +639,14 @@ class UrllibJsonTransport:
             body = exc.read()
             if is_maintenance_page(exc.geturl(), body) or exc.code in {502, 503, 504}:
                 raise PortalUnicoServiceUnavailableError("Portal Único indisponível.") from None
+            # A mensagem pode estar aninhada em uma lista de erros; o código é
+            # suficiente para identificar esta recusa sem expor o corpo da resposta.
+            if re.search(rb"(?<![A-Za-z0-9])DIMP-ER0002(?![A-Za-z0-9])", body, re.I):
+                raise PortalUnicoImporterRepresentationError(
+                    "O usuário não representa o importador informado.",
+                    status_code=exc.code,
+                    error_code="DIMP-ER0002",
+                ) from exc
             try:
                 payload = self._decode_json(body)
             except PortalUnicoIntegrationError:
