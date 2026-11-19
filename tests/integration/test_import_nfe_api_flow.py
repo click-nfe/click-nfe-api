@@ -11,6 +11,8 @@ import pytest
 from app import create_app
 from app.extensions import db
 from app.models import Client, DuimpSnapshot, NfeDraft, Organization, User
+from app.integrations.portal_unico import PortalUnicoApiError, PortalUnicoServiceUnavailableError
+from app.models.import_process import ExternalApiRequestLog, ImportProcess, ImportProcessStatus
 from app.services.import_process import ImportNfeService
 from app.models.nfe_issuance import (
     NfeAttemptStatus,
@@ -104,6 +106,58 @@ def test_sefaz_production_catalog_resolves_all_states_without_env_configuration(
         db.session.commit()
         with pytest.raises(SefazConfigurationError):
             SefazClient.from_config({"NFE_SEFAZ_PRODUCTION_ENDPOINTS_JSON": '{"35":{"authorization":"https://example.invalid"}}'})
+
+
+@pytest.mark.parametrize(
+    ("failure", "status", "error_code"),
+    [
+        (PortalUnicoApiError("Versão indisponível", status_code=422, error_code="DUIMP_VERSION"), 502, "DUIMP_VERSION"),
+        (PortalUnicoServiceUnavailableError("Portal em manutenção"), 503, "PortalUnicoServiceUnavailableError"),
+        (RuntimeError("normalização falhou"), 500, "RuntimeError"),
+    ],
+)
+def test_duimp_fetch_failure_retains_diagnostic_after_rollback(
+    api, monkeypatch, failure, status, error_code
+):
+    client, headers, importer_id = api
+    created = client.post(
+        "/import-processes",
+        headers=headers,
+        json={
+            "importer_id": importer_id,
+            "reference_code": "RETIFICADA-DIAGNOSTICO",
+            "duimp_number": "26BR0002263407-0",
+            "source": "manual",
+        },
+    )
+    assert created.status_code == 201
+    process_id = created.get_json()["id"]
+
+    class FailingGateway:
+        def fetch_duimp(self, **_kwargs):
+            raise failure
+
+    monkeypatch.setattr(
+        ImportNfeService, "_duimp_gateway_for", lambda *_args, **_kwargs: FailingGateway()
+    )
+    result = client.post(
+        f"/import-processes/{process_id}/duimp/fetch", headers=headers,
+        json={"enrich_catalog": True},
+    )
+    assert result.status_code == status
+    reference = result.get_json()["reference"]
+    assert len(reference) == 16
+    assert str(failure) not in result.get_json()["message"]
+    with client.application.app_context():
+        process = db.session.get(ImportProcess, UUID(process_id))
+        assert process.status == ImportProcessStatus.DUIMP_FETCH_FAILED.value
+        log = ExternalApiRequestLog.query.filter_by(
+            import_process_id=process.id, correlation_id=reference
+        ).one()
+        assert log.success is False
+        assert log.error_code == error_code
+        assert log.request_payload["duimp_number"] == "26BR0002263407-0"
+        assert log.response_payload is None
 
 
 def test_api_flow_from_manual_duimp_snapshot_to_unsigned_xml(api):

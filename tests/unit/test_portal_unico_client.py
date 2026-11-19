@@ -275,6 +275,30 @@ def test_gateway_rejects_item_count_mismatch():
         )
 
 
+def test_gateway_uses_retified_current_version_and_replacement_items():
+    transport = FakeTransport([
+        response({}, **{"Set-Token": "jwt", "X-CSRF-Token": "csrf"}),
+        response({"versao": "2"}),
+        response({"quantidadeItens": 2}),
+        response([
+            {"identificacao": {"numeroItem": 2}},
+            {"identificacao": {"numeroItem": 3}},
+        ]),
+    ])
+    gateway = PortalUnicoDuimpGateway(
+        credentials=PortalUnicoCredentials("id", "secret"),
+        environment="production", transport=transport,
+    )
+
+    result = gateway.fetch_duimp(
+        duimp_number="26BR0002263407-0", enrich_catalog=False
+    )
+    assert result["versao"] == "2"
+    assert [item["identificacao"]["numeroItem"] for item in result["itens"]] == [2, 3]
+    assert transport.requests[2].url.endswith("/duimp/26BR00022634070/2")
+    assert transport.requests[3].url.endswith("/duimp/26BR00022634070/2/itens")
+
+
 def test_gateway_enriches_products_and_operators_from_catalog():
     item = {
         "identificacao": {"numeroItem": 1},

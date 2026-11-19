@@ -1,4 +1,6 @@
 from io import BytesIO
+from datetime import datetime
+from uuid import uuid4
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from flask import Blueprint, Response, current_app, g, jsonify, request
@@ -13,6 +15,7 @@ from ..integrations.portal_unico import (
 )
 from ..models.import_process import (
     DuimpSnapshot,
+    ExternalApiRequestLog,
     ExternalAuthType,
     ExternalConnectionStatus,
     ExternalProvider,
@@ -590,6 +593,12 @@ def fetch_process_duimp(process_id: str):
 
     try:
         payload = FetchDuimpSchema().load(json_payload())
+    except ValidationError as exc:
+        return validation_error_response(exc)
+
+    started_at = datetime.utcnow()
+    reference = uuid4().hex[:16]
+    try:
         result = service.fetch_duimp_for_process(process, payload)
         db.session.commit()
         return (
@@ -601,23 +610,75 @@ def fetch_process_duimp(process_id: str):
             ),
             201,
         )
-    except ValidationError as exc:
-        db.session.rollback()
-        return validation_error_response(exc)
     except ValueError as exc:
-        db.session.rollback()
+        _record_duimp_fetch_failure(service, process_uuid, payload, exc, started_at, reference)
         return bad_request_response(exc)
-    except PortalUnicoServiceUnavailableError:
-        db.session.rollback()
+    except PortalUnicoServiceUnavailableError as exc:
+        _record_duimp_fetch_failure(service, process_uuid, payload, exc, started_at, reference)
         return jsonify({
             "error": "portal_unico_service_unavailable",
             "message": "Serviço Indisponível. Consulte a disponibilidade do Portal Único e tente novamente mais tarde.",
+            "reference": reference,
         }), 503
+    except PortalUnicoIntegrationError as exc:
+        _record_duimp_fetch_failure(service, process_uuid, payload, exc, started_at, reference)
+        return jsonify({
+            "error": "external_integration_error",
+            "message": "A consulta ao Portal Único falhou. Consulte os registros da API com a referência informada.",
+            "reference": reference,
+        }), 502
     except Exception as exc:
+        _record_duimp_fetch_failure(service, process_uuid, payload, exc, started_at, reference)
+        return jsonify({
+            "error": "duimp_processing_error",
+            "message": "Não foi possível processar a DUIMP. Consulte os registros da API com a referência informada.",
+            "reference": reference,
+        }), 500
+
+
+def _record_duimp_fetch_failure(service, process_id, payload, exc, started_at, reference):
+    # A tentativa anterior foi revertida; grave o diagnóstico em nova transação.
+    # Nunca registre as credenciais ou o payload bruto do Portal Único aqui.
+    db.session.rollback()
+    current_app.logger.exception(
+        "DUIMP fetch failed reference=%s process_id=%s error_type=%s",
+        reference, process_id, type(exc).__name__,
+    )
+    try:
+        process = (
+            service.import_process_query_for_current_user()
+            .filter_by(id=process_id)
+            .first()
+        )
+        if process is None:
+            return
+        process.status = ImportProcessStatus.DUIMP_FETCH_FAILED.value
+        process.updated_at = datetime.utcnow()
+        db.session.add(ExternalApiRequestLog(
+            organization_id=process.organization_id,
+            import_process_id=process.id,
+            provider=payload.get("source_provider") or ExternalProvider.PORTAL_UNICO.value,
+            endpoint_name="duimp.fetch",
+            method=HttpMethod.GET.value,
+            request_payload={
+                "duimp_number": process.duimp_number,
+                "enrich_catalog": payload.get("enrich_catalog", True),
+            },
+            response_payload=None,
+            status_code=getattr(exc, "status_code", None),
+            success=False,
+            error_code=getattr(exc, "error_code", None) or type(exc).__name__,
+            error_message=str(exc),
+            correlation_id=reference,
+            started_at=started_at,
+            finished_at=datetime.utcnow(),
+        ))
+        db.session.commit()
+    except Exception:
         db.session.rollback()
-        return jsonify(
-            {"error": "external_integration_error", "message": str(exc)}
-        ), 502
+        current_app.logger.exception(
+            "Could not persist DUIMP fetch failure reference=%s", reference
+        )
 
 
 @import_process_bp.post("/<process_id>/simplified-prepare")
