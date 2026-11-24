@@ -290,11 +290,55 @@ def test_gateway_rejects_item_count_mismatch():
         transport=transport,
     )
 
-    with pytest.raises(Exception, match="informa 2 itens, mas a API retornou 1"):
+    with pytest.raises(Exception, match="informa 2 itens ativos, mas a API retornou 1 registro"):
         gateway.fetch_duimp(
             duimp_number="26BR00000000001",
             enrich_catalog=False,
         )
+
+
+def test_gateway_ignores_only_explicitly_inactive_items_after_retification():
+    transport = FakeTransport([
+        response({}, **{"Set-Token": "jwt", "X-CSRF-Token": "csrf"}),
+        response({"versao": "5"}),
+        response({"quantidadeItens": 3}),
+        response([
+            {"identificacao": {"numeroItem": 1}, "ativo": True},
+            {"identificacao": {"numeroItem": 2}, "ativo": False},
+            {"identificacao": {"numeroItem": 3}, "ativo": True},
+        ]),
+        response([
+            {"identificacao": {"numeroItem": 4}, "ativo": False},
+            {"identificacao": {"numeroItem": 5}},
+        ]),
+    ])
+    gateway = PortalUnicoDuimpGateway(
+        credentials=PortalUnicoCredentials("id", "secret"),
+        environment="production", transport=transport, page_size=3,
+    )
+
+    result = gateway.fetch_duimp(
+        duimp_number="26BR0001552875-9", enrich_catalog=False
+    )
+    assert result["versao"] == "5"
+    assert [item["identificacao"]["numeroItem"] for item in result["itens"]] == [1, 3, 5]
+    assert [request.query["inicial"] for request in transport.requests[3:]] == [1, 4]
+
+
+def test_gateway_does_not_discard_unmarked_items_to_match_expected_count():
+    transport = FakeTransport([
+        response({}, **{"Set-Token": "jwt", "X-CSRF-Token": "csrf"}),
+        response({"versao": "5"}),
+        response({"quantidadeItensAtivos": 2, "quantidadeItens": 3}),
+        response([{"identificacao": {"numeroItem": number}} for number in (1, 2, 3)]),
+    ])
+    gateway = PortalUnicoDuimpGateway(
+        credentials=PortalUnicoCredentials("id", "secret"),
+        environment="production", transport=transport,
+    )
+
+    with pytest.raises(PortalUnicoIntegrationError, match="3 registros \\(3 considerados ativos e 0 inativos explícitos\\)"):
+        gateway.fetch_duimp(duimp_number="26BR0001552875-9", enrich_catalog=False)
 
 
 def test_gateway_uses_retified_current_version_and_replacement_items():
