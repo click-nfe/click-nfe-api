@@ -770,10 +770,15 @@ class PortalUnicoDuimpGateway:
             else general.get("quantidadeItens") or 0
         )
         returned_items = self._fetch_items(identifier.compact, version)
-        # Após uma retificação, a faixa consultada pode conter itens excluídos.
-        # Somente a marca explícita de inatividade autoriza sua remoção: jamais
-        # descarte itens para fazer a contagem coincidir com os dados gerais.
-        items = [item for item in returned_items if item.get("ativo") is not False]
+        # Após uma retificação, a faixa consultada pode conter itens excluídos,
+        # inclusive com os dados de produto ainda presentes. O Portal informa
+        # a inatividade por `status: INATIVO` (ou `ativo: false`); nunca descarte
+        # registros apenas para fazer a contagem coincidir com os dados gerais.
+        items = [
+            item for item in returned_items
+            if item.get("ativo") is not False
+            and str(item.get("status") or "").strip().upper() != "INATIVO"
+        ]
 
         if expected_items and len(items) != expected_items:
             without_product = [

@@ -325,6 +325,35 @@ def test_gateway_ignores_only_explicitly_inactive_items_after_retification():
     assert [request.query["inicial"] for request in transport.requests[3:]] == [1, 4]
 
 
+def test_gateway_filters_inactive_status_even_with_product_after_retification():
+    transport = FakeTransport([
+        response({}, **{"Set-Token": "jwt", "X-CSRF-Token": "csrf"}),
+        response({"versao": "5"}),
+        response({"quantidadeItensAtivos": 20, "quantidadeItens": 23}),
+        response([
+            {
+                "identificacao": {"numeroItem": number},
+                "status": "INATIVO" if number in (2, 3, 4) else "ATIVO",
+                "produto": {"codigo": str(number)},
+            }
+            for number in range(1, 24)
+        ]),
+    ])
+    gateway = PortalUnicoDuimpGateway(
+        credentials=PortalUnicoCredentials("id", "secret"),
+        environment="production", transport=transport,
+    )
+
+    result = gateway.fetch_duimp(
+        duimp_number="26BR0001552875-9", enrich_catalog=False
+    )
+
+    assert result["versao"] == "5"
+    assert [item["identificacao"]["numeroItem"] for item in result["itens"]] == [
+        1, *range(5, 24)
+    ]
+
+
 def test_gateway_does_not_discard_unmarked_items_to_match_expected_count():
     transport = FakeTransport([
         response({}, **{"Set-Token": "jwt", "X-CSRF-Token": "csrf"}),
