@@ -763,12 +763,28 @@ class PortalUnicoDuimpGateway:
         version_payload = self._get(f"/duimp/{identifier.compact}/versoes")
         version = self._extract_version(version_payload)
         general = self._get(f"/duimp/{identifier.compact}/{version}")
-        expected_items = int(general.get("quantidadeItens") or 0)
-        items = self._fetch_items(identifier.compact, version, expected_items)
+        expected_items = int(
+            general.get("quantidadeItensAtivos")
+            if general.get("quantidadeItensAtivos") is not None
+            else general.get("quantidadeItens") or 0
+        )
+        returned_items = self._fetch_items(identifier.compact, version)
+        # Após uma retificação, a faixa consultada pode conter itens excluídos.
+        # Somente a marca explícita de inatividade autoriza sua remoção: jamais
+        # descarte itens para fazer a contagem coincidir com os dados gerais.
+        items = [item for item in returned_items if item.get("ativo") is not False]
 
         if expected_items and len(items) != expected_items:
+            without_product = [
+                (item.get("identificacao") or {}).get("numeroItem")
+                for item in returned_items
+                if not item.get("produto")
+            ]
             raise PortalUnicoIntegrationError(
-                f"A DUIMP informa {expected_items} itens, mas a API retornou {len(items)}."
+                f"A DUIMP informa {expected_items} itens ativos, mas a API retornou "
+                f"{len(returned_items)} registros ({len(items)} considerados ativos e "
+                f"{len(returned_items) - len(items)} inativos explícitos). "
+                f"Itens sem dados de produto: {without_product[:30]}."
             )
 
         catalog_enrichment = self._empty_catalog_enrichment()
@@ -925,7 +941,7 @@ class PortalUnicoDuimpGateway:
         return payload
 
     def _fetch_items(
-        self, compact_number: str, version: int, expected_items: int
+        self, compact_number: str, version: int
     ) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         initial = 1
@@ -939,11 +955,13 @@ class PortalUnicoDuimpGateway:
                 raise PortalUnicoIntegrationError(
                     "A consulta de itens da DUIMP não retornou uma lista."
                 )
+            if any(not isinstance(item, dict) for item in page):
+                raise PortalUnicoIntegrationError(
+                    "A consulta de itens da DUIMP retornou um item inválido."
+                )
             items.extend(page)
 
             if not page:
-                break
-            if expected_items and len(items) >= expected_items:
                 break
             if len(page) < self.page_size:
                 break
