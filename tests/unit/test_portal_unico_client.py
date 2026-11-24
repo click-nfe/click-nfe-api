@@ -341,6 +341,33 @@ def test_gateway_does_not_discard_unmarked_items_to_match_expected_count():
         gateway.fetch_duimp(duimp_number="26BR0001552875-9", enrich_catalog=False)
 
 
+def test_gateway_count_diagnostic_reports_item_metadata_without_product_details():
+    transport = FakeTransport([
+        response({}, **{"Set-Token": "jwt", "X-CSRF-Token": "csrf"}),
+        response({"versao": "5"}),
+        response({"quantidadeItens": 2}),
+        response([
+            {"identificacao": {"numeroItem": 1}, "produto": {"codigo": "PRIVATE1"}},
+            {"identificacao": {"numeroItem": 1, "situacao": "RETIFICADO"},
+             "produto": {"codigo": "PRIVATE2"}},
+            {"identificacao": {"numeroItem": 3}, "situacaoItem": "ATIVO",
+             "produto": {"codigo": "PRIVATE3"}},
+        ]),
+    ])
+    gateway = PortalUnicoDuimpGateway(
+        credentials=PortalUnicoCredentials("id", "secret"),
+        environment="production", transport=transport,
+    )
+
+    with pytest.raises(PortalUnicoIntegrationError) as error:
+        gateway.fetch_duimp(duimp_number="26BR0001552875-9", enrich_catalog=False)
+    message = str(error.value)
+    assert "Números retornados: ['1', '1', '3']; duplicados: ['1']" in message
+    assert "identificacao.situacao" in message
+    assert "situacaoItem" in message
+    assert "PRIVATE" not in message
+
+
 def test_gateway_uses_retified_current_version_and_replacement_items():
     transport = FakeTransport([
         response({}, **{"Set-Token": "jwt", "X-CSRF-Token": "csrf"}),

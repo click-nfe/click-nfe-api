@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from collections import Counter
 import hashlib
 import json
 import os
@@ -780,11 +781,53 @@ class PortalUnicoDuimpGateway:
                 for item in returned_items
                 if not item.get("produto")
             ]
+            # Somente metadados: não registre produto, valores, tributos ou
+            # identificadores do importador ao investigar a divergência.
+            item_numbers = [
+                str((item.get("identificacao") or {}).get("numeroItem"))
+                for item in returned_items
+            ]
+            duplicates = [
+                number for number, count in Counter(item_numbers).items()
+                if count > 1
+            ]
+            item_keys = sorted({key for item in returned_items for key in item})
+            identification_keys = sorted({
+                key for item in returned_items
+                for key in (item.get("identificacao") or {})
+            })
+            status_fields = ("ativo", "situacao", "situacaoItem", "status")
+            status_markers = [
+                {
+                    "numeroItem": number,
+                    **{
+                        key: str(item[key])[:40]
+                        for key in status_fields
+                        if key in item and isinstance(item[key], (str, int, bool))
+                    },
+                    **{
+                        f"identificacao.{key}": str(value)[:40]
+                        for key in status_fields
+                        if isinstance(item.get("identificacao"), dict)
+                        if (value := item["identificacao"].get(key)) is not None
+                        and isinstance(value, (str, int, bool))
+                    },
+                }
+                for number, item in zip(item_numbers, returned_items)
+                if any(key in item for key in status_fields)
+                or (
+                    isinstance(item.get("identificacao"), dict)
+                    and any(key in item["identificacao"] for key in status_fields)
+                )
+            ]
             raise PortalUnicoIntegrationError(
                 f"A DUIMP informa {expected_items} itens ativos, mas a API retornou "
                 f"{len(returned_items)} registros ({len(items)} considerados ativos e "
                 f"{len(returned_items) - len(items)} inativos explícitos). "
-                f"Itens sem dados de produto: {without_product[:30]}."
+                f"Itens sem dados de produto: {without_product[:30]}. "
+                f"Números retornados: {item_numbers[:100]}; duplicados: {duplicates[:30]}. "
+                f"Campos dos itens: {item_keys}; campos de identificação: {identification_keys}; "
+                f"marcadores de situação: {status_markers[:30]}."
             )
 
         catalog_enrichment = self._empty_catalog_enrichment()
